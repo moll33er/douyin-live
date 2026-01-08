@@ -1,0 +1,14 @@
+{
+  "name": "douyin-live-extractor",
+  "version": "1.0.0",
+  "description": "Extract Douyin live stream URLs",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "commander": "^11.0.0"
+  }
+}
