@@ -1,0 +1,374 @@
+:root {
+    --primary: #fe2c55;
+    /* Douyin Red */
+    --primary-hover: #e6254a;
+    --bg-dark: #0f1014;
+    --card-bg: #1b1c21;
+    --text-main: #ffffff;
+    --text-sec: #8c8d96;
+    --border: #2f3036;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+}
+
+#app {
+    width: 100%;
+    max-width: 800px;
+    padding: 20px;
+}
+
+.screen {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Auth Screen */
+#login-screen {
+    justify-content: center;
+    align-items: center;
+}
+
+.card {
+    background-color: var(--card-bg);
+    border-radius: 12px;
+    padding: 24px;
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 400px;
+}
+
+h1,
+h2,
+h3 {
+    margin-bottom: 16px;
+}
+
+.input-group {
+    margin-bottom: 16px;
+}
+
+label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-sec);
+    font-size: 14px;
+}
+
+input {
+    width: 100%;
+    padding: 12px;
+    background-color: #2b2c31;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: white;
+    font-size: 16px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+input:focus {
+    border-color: var(--primary);
+}
+
+.btn {
+    cursor: pointer;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn.primary {
+    background-color: var(--primary);
+    color: white;
+    width: 100%;
+    padding: 12px;
+}
+
+.btn.primary:hover {
+    background-color: var(--primary-hover);
+}
+
+.btn.sm {
+    padding: 8px 16px;
+    background-color: #3b3c42;
+    color: white;
+}
+
+.btn.sm:hover {
+    background-color: #4b4c52;
+}
+
+.btn.text {
+    background: none;
+    color: var(--text-sec);
+}
+
+.btn.text:hover {
+    color: white;
+}
+
+.error-msg {
+    color: #ff4d4f;
+    margin-top: 12px;
+    text-align: center;
+    font-size: 14px;
+}
+
+/* Dashboard */
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.logo {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.search-section {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+#url-input {
+    flex: 1;
+}
+
+#extract-btn {
+    width: auto;
+    padding: 0 24px;
+}
+
+.input-wrapper {
+    flex: 1;
+    position: relative;
+}
+
+#url-input {
+    width: 100%;
+}
+
+.history-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background-color: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-top: 4px;
+    z-index: 1000;
+    max-height: 300px;
+    overflow-y: auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.history-item {
+    padding: 8px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+}
+
+.history-item:last-child {
+    border-bottom: none;
+}
+
+.history-item:hover {
+    background-color: #2b2c31;
+}
+
+.history-info {
+    flex: 1;
+    overflow: hidden;
+}
+
+.history-title {
+    font-size: 14px;
+    color: white;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+}
+
+.history-sub {
+    font-size: 12px;
+    color: var(--text-sec);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.delete-hist-btn {
+    background: none;
+    border: none;
+    color: var(--text-sec);
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 16px;
+    margin-left: 8px;
+}
+
+.delete-hist-btn:hover {
+    color: #ff4d4f;
+}
+
+.stream-info {
+    display: flex;
+    gap: 16px;
+}
+
+#cover-img {
+    width: 100px;
+    height: 100px;
+    object-fit: cover;
+    border-radius: 8px;
+    background-color: #2b2c31;
+}
+
+.status-badge {
+    background-color: #1a2e1f;
+    color: #4ade80;
+    padding: 4px 12px;
+    border-radius: 100px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Quality Grid */
+.button-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.quality-btn {
+    padding: 10px 20px;
+    background-color: #2b2c31;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: white;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.quality-btn:hover {
+    border-color: var(--primary);
+}
+
+.quality-btn.active {
+    background-color: var(--primary);
+    border-color: var(--primary);
+}
+
+/* Player */
+#player-container {
+    padding: 0;
+    overflow: hidden;
+    position: relative;
+    /* Context for fullscreen */
+}
+
+#player-container.web-fullscreen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 9999;
+    background: black;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+#player-container.web-fullscreen video {
+    flex: 1;
+    min-height: 0;
+    /* Important for flex shrinking */
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+video {
+    width: 100%;
+    aspect-ratio: 16/9;
+    background-color: black;
+}
+
+/* Remove default aspect ratio wrapper in fullscreen if any */
+#player-container.web-fullscreen video {
+    aspect-ratio: unset;
+}
+
+.controls-bar {
+    padding: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--card-bg);
+    border-top: 1px solid var(--border);
+    z-index: 10000;
+    flex-shrink: 0;
+    /* Prevent controls from shrinking */
+    width: 100%;
+}
+
+#player-container.web-fullscreen .controls-bar {
+    background-color: rgba(27, 28, 33, 0.9);
+    position: static;
+}
+
+.playback-controls {
+    display: flex;
+    gap: 8px;
+}
+
+.speed-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-sec);
+    font-size: 14px;
+}
+
+select {
+    background-color: #2b2c31;
+    border: 1px solid var(--border);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    outline: none;
+}
