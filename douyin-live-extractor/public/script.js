@@ -25,6 +25,7 @@ const speedSelect = document.getElementById('speed-select');
 const forwardBtn = document.getElementById('forward-btn');
 const reloadBtn = document.getElementById('reload-btn');
 const fullscreenBtn = document.getElementById('fullscreen-btn');
+const qualitySelect = document.getElementById('quality-select');
 
 // --- Auth Logic ---
 
@@ -81,6 +82,34 @@ async function handleExtract() {
     playerContainer.classList.add('hidden');
     destroyPlayer();
 
+    // Direct Stream Support
+    // Check path extension instead of full URL
+    const urlPath = url.split('?')[0];
+    if (urlPath.endsWith('.flv') || urlPath.endsWith('.m3u8')) {
+        const type = urlPath.endsWith('.flv') ? 'flv' : 'm3u8';
+        const filename = urlPath.split('/').pop();
+
+        const directData = {
+            title: 'Direct Stream Playback',
+            anchor_name: 'Direct Link',
+            cover: '', // No cover for direct link
+            flv: type === 'flv' ? { 'original': { url, sdk_params: {}, label: 'Original' } } : {},
+            hls: type === 'm3u8' ? { 'original': { url, sdk_params: {}, label: 'Original' } } : {}
+        };
+
+        renderInfo(directData);
+        renderQualities(directData);
+        state.currentUrl = url;
+        addToHistory(directData, url);
+
+        // Auto play
+        playStream(url, type);
+
+        extractBtn.textContent = 'Parse';
+        extractBtn.disabled = false;
+        return;
+    }
+
     try {
         const res = await axios.get('/api/live', {
             params: { url: url },
@@ -136,6 +165,7 @@ function renderQualities(data) {
         });
     }
 
+    qualitySelect.innerHTML = '';
     streams.forEach(stream => {
         const btn = document.createElement('button');
         btn.className = 'quality-btn';
@@ -146,7 +176,18 @@ function renderQualities(data) {
             playStream(stream.url, stream.type);
         };
         qualityButtons.appendChild(btn);
+
+        // Populate dropdown
+        const option = document.createElement('option');
+        option.value = JSON.stringify({ url: stream.url, type: stream.type });
+        option.textContent = `${stream.label} (${stream.type})`;
+        qualitySelect.appendChild(option);
     });
+
+    // Select first one by default in dropdown if exists
+    if (streams.length > 0) {
+        qualitySelect.value = JSON.stringify({ url: streams[0].url, type: streams[0].type });
+    }
 
     qualitySection.classList.remove('hidden');
 }
@@ -212,6 +253,16 @@ function playStream(url, type) {
             });
         }
     }
+    // Sync dropdown state if needed (playStream might be called from buttons)
+    // Find matching option
+    Array.from(qualitySelect.options).forEach(opt => {
+        try {
+            const val = JSON.parse(opt.value);
+            if (val.url === url) {
+                qualitySelect.value = opt.value;
+            }
+        } catch (e) { }
+    });
 }
 
 // --- Controls ---
@@ -232,6 +283,15 @@ forwardBtn.onclick = () => {
 
 speedSelect.onchange = (e) => {
     videoElement.playbackRate = parseFloat(e.target.value);
+};
+
+qualitySelect.onchange = (e) => {
+    try {
+        const { url, type } = JSON.parse(e.target.value);
+        playStream(url, type);
+    } catch (err) {
+        console.error("Failed to parse quality selection", err);
+    }
 };
 
 reloadBtn.onclick = () => {

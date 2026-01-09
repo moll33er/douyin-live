@@ -41,7 +41,8 @@
             <main>
                 <div class="search-section">
                     <div class="input-wrapper">
-                        <input type="text" id="url-input" placeholder="Paste Douyin Live URL or Room ID">
+                        <input type="text" id="url-input"
+                            placeholder="Paste Douyin Live URL, Room ID, or Direct Stream Link (.flv/.m3u8)">
                         <div id="history-dropdown" class="history-dropdown hidden">
                             <!-- History items injected here -->
                         </div>
@@ -76,6 +77,10 @@
                             <button id="fullscreen-btn" class="btn sm">Fullscreen</button>
                         </div>
                         <div class="speed-controls">
+                            <label>Quality:</label>
+                            <select id="quality-select">
+                                <option value="" disabled selected>Auto</option>
+                            </select>
                             <label>Speed:</label>
                             <select id="speed-select">
                                 <option value="0.5">0.5x</option>
