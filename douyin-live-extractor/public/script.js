@@ -1,7 +1,8 @@
 const state = {
     token: localStorage.getItem('douyin_token') || null,
     currentUrl: '',
-    player: null
+    player: null,
+    latencyTimer: null
 };
 
 // Elements
@@ -26,6 +27,7 @@ const forwardBtn = document.getElementById('forward-btn');
 const reloadBtn = document.getElementById('reload-btn');
 const fullscreenBtn = document.getElementById('fullscreen-btn');
 const qualitySelect = document.getElementById('quality-select');
+const autoLatencyToggle = document.getElementById('auto-latency-toggle');
 
 // --- Auth Logic ---
 
@@ -200,6 +202,7 @@ function destroyPlayer() {
         // HLS.js uses destroy(), flv.js also destroy()
         state.player = null;
     }
+    stopLatencyMonitor();
     // Also stop video element
     videoElement.pause();
     videoElement.src = '';
@@ -263,6 +266,11 @@ function playStream(url, type) {
             }
         } catch (e) { }
     });
+
+    // Start Monitor if enabled
+    if (autoLatencyToggle.checked) {
+        startLatencyMonitor();
+    }
 }
 
 // --- Controls ---
@@ -305,6 +313,72 @@ reloadBtn.onclick = () => {
 fullscreenBtn.onclick = () => {
     playerContainer.classList.toggle('web-fullscreen');
 };
+
+// --- Auto Latency Logic ---
+
+function startLatencyMonitor() {
+    stopLatencyMonitor();
+    if (!state.player) return;
+
+    state.latencyTimer = setInterval(() => {
+        if (videoElement.paused || !videoElement.buffered.length) return;
+
+        const end = videoElement.buffered.end(videoElement.buffered.length - 1);
+        const latency = end - videoElement.currentTime;
+
+        // Thresholds: > 1.5s Hard Jump, > 0.5s Smooth Speedup
+        if (latency > 1.5) {
+            videoElement.currentTime = end - 0.1;
+            // console.log('Auto-Sync: Hard Jump', latency);
+        } else if (latency > 0.5) {
+            // Only set if not already sped up to avoid constant assignment
+            if (videoElement.playbackRate === 1.0) {
+                videoElement.playbackRate = 1.1;
+                // console.log('Auto-Sync: Speed Up 1.1x', latency);
+            }
+        } else {
+            // Back to normal
+            if (videoElement.playbackRate !== 1.0) {
+                videoElement.playbackRate = 1.0;
+                // console.log('Auto-Sync: Normal', latency);
+            }
+        }
+    }, 1000);
+}
+
+function stopLatencyMonitor() {
+    if (state.latencyTimer) {
+        clearInterval(state.latencyTimer);
+        state.latencyTimer = null;
+    }
+    // Reset speed just in case, but maybe user wants it? 
+    // If we stop monitor, we should probably reset to 1.0 if we were speeding up.
+    if (videoElement.playbackRate === 1.1) {
+        videoElement.playbackRate = 1.0;
+    }
+}
+
+autoLatencyToggle.onchange = () => {
+    updateSpeedControls();
+    if (autoLatencyToggle.checked) {
+        startLatencyMonitor();
+    } else {
+        stopLatencyMonitor();
+    }
+};
+
+function updateSpeedControls() {
+    if (autoLatencyToggle.checked) {
+        speedSelect.disabled = true;
+        speedSelect.value = '1.0';
+        videoElement.playbackRate = 1.0;
+    } else {
+        speedSelect.disabled = false;
+    }
+}
+
+// Init speed controls state
+updateSpeedControls();
 
 // --- History Logic ---
 
