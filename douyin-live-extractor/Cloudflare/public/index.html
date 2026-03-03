@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Douyin Live Extractor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.bootcdn.net/ajax/libs/flv.js/1.6.2/flv.min.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/hls.js/1.4.0/hls.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <!-- Login Screen -->
+        <div id="login-screen" class="screen">
+            <div class="card login-card">
+                <h1>Login</h1>
+                <div class="input-group">
+                    <label>Username</label>
+                    <input type="text" id="username" placeholder="Enter username">
+                </div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="password" placeholder="Enter password">
+                </div>
+                <button id="login-btn" class="btn primary">Login</button>
+                <div id="login-error" class="error-msg"></div>
+            </div>
+        </div>
+
+        <!-- Dashboard Screen -->
+        <div id="dashboard-screen" class="screen hidden">
+            <header>
+                <div class="logo">Douyin Live</div>
+                <button id="logout-btn" class="btn text">Logout</button>
+            </header>
+
+            <main>
+                <div class="search-section">
+                    <div class="input-wrapper">
+                        <input type="text" id="url-input"
+                            placeholder="Paste Douyin Live URL, Room ID, or Direct Stream Link (.flv/.m3u8)">
+                        <div id="history-dropdown" class="history-dropdown hidden">
+                            <!-- History items injected here -->
+                        </div>
+                    </div>
+                    <button id="extract-btn" class="btn primary">Parse</button>
+                </div>
+
+                <div id="info-section" class="card hidden">
+                    <div class="stream-info">
+                        <img id="cover-img" src="" alt="Cover">
+                        <div class="details">
+                            <h2 id="room-title">Loading...</h2>
+                            <p id="anchor-name">Anchor</p>
+                            <span id="room-status" class="status-badge">Live</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="quality-section" class="card hidden">
+                    <h3>Select Quality</h3>
+                    <div id="quality-buttons" class="button-grid">
+                        <!-- Quality buttons injected here -->
+                    </div>
+                </div>
+
+                <div id="player-container" class="card hidden">
+                    <video id="video-player" controls></video>
+                    <div class="controls-bar">
+                        <div class="playback-controls">
+                            <button id="reload-btn" class="btn sm">Reload Link</button>
+                            <button id="forward-btn" class="btn sm">Sync Live</button>
+                            <button id="fullscreen-btn" class="btn sm">Fullscreen</button>
+                        </div>
+                        <div class="speed-controls">
+                            <label>Quality:</label>
+                            <select id="quality-select">
+                                <option value="" disabled selected>Auto</option>
+                            </select>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="auto-latency-toggle" checked> Auto-Sync
+                            </label>
+                            <label>Speed:</label>
+                            <select id="speed-select">
+                                <option value="0.5">0.5x</option>
+                                <option value="1.0" selected>1.0x</option>
+                                <option value="1.25">1.25x</option>
+                                <option value="1.5">1.5x</option>
+                                <option value="2.0">2.0x</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,9 @@
+{
+    "name": "douyin-live-extractor-cloudflare",
+    "version": "1.0.0",
+    "description": "Cloudflare Pages implementation for Douyin Live Extractor",
+    "private": true,
+    "dependencies": {
+        "jose": "^5.2.3"
+    }
+}
