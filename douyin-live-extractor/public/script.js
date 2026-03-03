@@ -61,7 +61,7 @@ async function handleLogin() {
             checkAuth();
         }
     } catch (err) {
-        loginError.textContent = err.response?.data?.error || 'Login failed';
+        loginError.textContent = err.response?.data?.error || '登录失败';
     }
 }
 
@@ -77,7 +77,7 @@ async function handleExtract() {
     const url = urlInput.value;
     if (!url) return;
 
-    extractBtn.textContent = 'Parsing...';
+    extractBtn.textContent = '解析中...';
     extractBtn.disabled = true;
     infoSection.classList.add('hidden');
     qualitySection.classList.add('hidden');
@@ -92,11 +92,11 @@ async function handleExtract() {
         const filename = urlPath.split('/').pop();
 
         const directData = {
-            title: 'Direct Stream Playback',
-            anchor_name: 'Direct Link',
+            title: '直链播放',
+            anchor_name: '直链',
             cover: '', // No cover for direct link
-            flv: type === 'flv' ? { 'original': { url, sdk_params: {}, label: 'Original' } } : {},
-            hls: type === 'm3u8' ? { 'original': { url, sdk_params: {}, label: 'Original' } } : {}
+            flv: type === 'flv' ? { 'original': { url, sdk_params: {}, label: '原画' } } : {},
+            hls: type === 'm3u8' ? { 'original': { url, sdk_params: {}, label: '原画' } } : {}
         };
 
         renderInfo(directData);
@@ -107,7 +107,7 @@ async function handleExtract() {
         // Auto play
         playStream(url, type);
 
-        extractBtn.textContent = 'Parse';
+        extractBtn.textContent = '解析';
         extractBtn.disabled = false;
         return;
     }
@@ -128,12 +128,12 @@ async function handleExtract() {
         if (err.response && (err.response.status === 401 || err.response.status === 403)) {
             // Token expired or invalid
             handleLogout();
-            loginError.textContent = 'Session expired, please login again.';
+            loginError.textContent = '会话已过期，请重新登录。';
         } else {
-            alert(err.response?.data?.error || 'Failed to extract stream data');
+            alert(err.response?.data?.error || '解析直播数据失败');
         }
     } finally {
-        extractBtn.textContent = 'Parse';
+        extractBtn.textContent = '解析';
         extractBtn.disabled = false;
     }
 }
@@ -443,14 +443,14 @@ function renderHistory() {
         const niceUrl = item.url.replace('https://live.douyin.com/', '');
 
         info.innerHTML = `
-            <div class="history-title">${item.title || 'Unknown Room'}</div>
+            <div class="history-title">${item.title || '未知房间'}</div>
             <div class="history-sub">${item.anchor_name || '-'} | ${niceUrl}</div>
         `;
 
         const delBtn = document.createElement('button');
         delBtn.className = 'delete-hist-btn';
         delBtn.innerHTML = '&times;';
-        delBtn.title = 'Remove';
+        delBtn.title = '移除';
         delBtn.onclick = (e) => deleteHistory(e, item.url);
 
         div.appendChild(info);
