@@ -1,33 +1,53 @@
-# Douyin Live Extractor
+# 抖音直播流提取器 (Douyin Live Extractor)
 
-This tool extracts live stream URLs (FLV and HLS) from a Douyin live room.
-It was ported from the userscript `douyin.js`.
+这是一个用于提取抖音直播间真实推流地址（FLV / HLS）的工具。项目不仅可以在本地通过 Node.js 命令行直接运行，还提供了一套完整的前后端 Web 交互界面，支持部署到 Cloudflare Pages 以实现边缘网络加速和零成本托管。
 
-## Installation
+## 🌟 主要功能
 
-1. Navigate to this directory.
-2. Install dependencies:
+1. **一键解析与提取**
+   - 支持通过传入**抖音直播链接**或**房间号 (Room ID)** 快速解析。
+   - 自动获取直播间的主播昵称、标题、封面及开播状态。
+   - 解析出各清晰度（如原画、超清、高清等）的推流播放地址（包含 FLV 和 HLS 格式）。
+
+2. **Web 沉浸式播放器** *(仅限 Web 版/Cloudflare部署版)*
+   - 内置基于 `flv.js` 和 `hls.js` 的网页端播放器，提取后可直接在网页内看直播。
+   - **清晰度切换**：支持直播源多种画质选择。
+   - **播放控制**：支持无级变速（0.5x - 2.0x 倍速播放）、全屏模式。
+   - **低延迟自动同步**：提供手动“同步直播”按钮以及“自动同步”开关，防止长时间全自动后台静音播放导致的画面累积延迟。
+
+3. **双重运行模式**
+   - **本地脚本命令行模式**：通过简单的 Node.js 端脚本，实现开箱即用的控制台直接打印真实地址，并对部分 URL 提供通用验证与提取。
+   - **Serverless 边缘无服务器模式**：前端采用现代风格的响应式中文 UI，后端使用 Cloudflare Pages Functions，彻底免除跨域问题，并在全球范围内提供极其迅速的 API 调度方案。
+
+4. **安全鉴权**
+   - Web 部署版内置基于 JWT 的轻便安全鉴权框架，采用前端用户名与密码匹配环境变量存储 Secrets 的鉴权流程，防止公网部署后未授权用户滥用。
+
+## 🚀 本地运行 (命令行模式)
+
+如果您只需要本地解析且无需图形界面，您可直接使用根目录下提供的环境进行简单调用：
+
+1. **安装主要依赖**：
    ```bash
    npm install
    ```
 
-## Usage
+2. **基本用法**：
+   ```bash
+   node index.js <直播间链接 或 房间号>
+   ```
 
-Run the script with a Douyin Live URL or Room ID:
+3. **示例**：
+   ```bash
+   node index.js https://live.douyin.com/1234567890
+   # 或者直接使用房间号
+   node index.js 1234567890
+   ```
+> **注意**：由于抖音存在反爬虫机制。如果发现在本地运行时显示“失败”或者卡住拿不到任何有效返回流，可能需要通过浏览器 DevTools 抓取有效的 `__ac_nonce` 、Cookie 或者其他必要的 Headers 参数放入到 `index.js` 发送请求的方法中。 
 
-```bash
-node index.js <url_or_room_id>
-```
+## ☁️ 部署到 Web (Cloudflare Pages版)
 
-Example:
-```bash
-node index.js https://live.douyin.com/1234567890
-# or
-node index.js 1234567890
-```
+如果您想要使用带有图形界面、流播放器和账号登录模块的完整应用，我们强烈建议将其部署到 Cloudflare Pages 环境中。
 
-## Note
+在所有的前端资产及 `Functions API` 我们放在了 `Cloudflare` 文件夹中。您可以实现零成本、免服务器的页面与后端接口整体托管。
 
-This script uses `axios` to fetch the page content. Douyin has anti-crawling mechanisms.
-If you see errors about failing to extract data, it might be due to missing cookies or verification challenges (captcha).
-In that case, you might need to extract `__ac_nonce` or other cookies from your browser and update the `headers` in `index.js`.
+关于详细部署方式（比如链接 Git，使用 Wrangler），以及必须的环境变量配置，请参考该特定子包的部署文档：[Cloudflare 部署指南](./Cloudflare/README.md)
