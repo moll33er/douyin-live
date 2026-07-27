@@ -21,6 +21,7 @@
 
 4. **安全鉴权**
    - Web 部署版内置基于 JWT 的轻便安全鉴权框架，采用前端用户名与密码匹配环境变量存储 Secrets 的鉴权流程，防止公网部署后未授权用户滥用。
+   - 可通过全局配置 `requireLogin` 控制是否需要登录，默认开启。
 
 ## 🚀 本地运行 (命令行模式)
 
@@ -51,3 +52,17 @@
 在所有的前端资产及 `Functions API` 我们放在了 `Cloudflare` 文件夹中。您可以实现零成本、免服务器的页面与后端接口整体托管。
 
 关于详细部署方式（比如链接 Git，使用 Wrangler），以及必须的环境变量配置，请参考该特定子包的部署文档：[Cloudflare 部署指南](./Cloudflare/README.md)
+
+## 🔐 登录开关
+
+本地 Web 服务读取根目录 `config.json` 中的 `requireLogin`：
+
+```json
+{
+  "username": "admin",
+  "password": "password123",
+  "requireLogin": true
+}
+```
+
+将 `requireLogin` 改为 `false` 后，页面会直接进入主界面，`/api/live` 也不再校验 token。

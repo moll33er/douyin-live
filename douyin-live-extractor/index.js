@@ -21,7 +21,8 @@ console.log('Generated new JWT Secret for this session.');
 const configPath = path.join(__dirname, 'config.json');
 let config = {
   username: 'admin',
-  password: 'password123'
+  password: 'password123',
+  requireLogin: true
 };
 
 try {
@@ -34,11 +35,17 @@ try {
   console.error('Error loading config.json:', error);
 }
 
+const REQUIRE_LOGIN = config.requireLogin !== false;
+
 // Middleware
 app.use(express.json());
 app.use(express.static('public')); // Serve static files from 'public' directory
 
 // Login Endpoint
+app.get('/api/config', (req, res) => {
+  res.json({ requireLogin: REQUIRE_LOGIN });
+});
+
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   if (username === config.username && password === config.password) {
@@ -52,6 +59,10 @@ app.post('/api/login', (req, res) => {
 
 // Authentication Middleware
 const authMiddleware = (req, res, next) => {
+  if (!REQUIRE_LOGIN) {
+    return next();
+  }
+
   const token = req.query.token || req.headers['x-api-key'];
 
   if (!token) {
@@ -131,7 +142,7 @@ app.get('/api/live', authMiddleware, async (req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
-  console.log(`Log in via the web interface to generate a token.`);
+  console.log(REQUIRE_LOGIN ? `Log in via the web interface to generate a token.` : `Login is disabled by config.`);
 });
 
 server.on('error', (e) => {

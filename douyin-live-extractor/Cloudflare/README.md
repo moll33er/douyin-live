@@ -50,11 +50,12 @@ Cloudflare 官方限制：**通过网页端直接拖拽上传文件夹（Direct 
 
 由于边缘节点无法读取本地配置文件（且每次启动动态生成 Secret 会导致用户频繁掉线），所有的配置**必须通过环境变量注入**。
 
-在 Cloudflare Pages 的项目设置中（**Settings -> Environment variables**），**添加以下三个变量** (Production 和 Preview 都需要)：
+在 Cloudflare Pages 的项目设置中（**Settings -> Environment variables**），**添加以下变量** (Production 和 Preview 都需要)：
 
 * `USERNAME` (您的登录账号，默认如果未设置会回退为 `admin`)
 * `PASSWORD` (您的登录密码，默认如果未设置会回退为 `password123`)
 * `JWT_SECRET` (用于加密 Token 的专属密钥，您可以生成一段复杂的随机字符串填入)
+* `REQUIRE_LOGIN` (是否需要登录，默认 `true`；设置为 `false` 可关闭登录校验)
 
 > 💡 *加了环境变量后，建议重新触发一次 Deploy，让包含最新环境变量的 Worker 运行。*
 

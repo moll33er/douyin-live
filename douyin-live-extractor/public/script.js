@@ -1,3 +1,5 @@
+let REQUIRE_LOGIN = true;
+
 const state = {
     token: localStorage.getItem('douyin_token') || null,
     currentUrl: '',
@@ -31,7 +33,23 @@ const autoLatencyToggle = document.getElementById('auto-latency-toggle');
 
 // --- Auth Logic ---
 
+async function loadAppConfig() {
+    try {
+        const res = await axios.get('/api/config');
+        REQUIRE_LOGIN = res.data.requireLogin !== false;
+    } catch (err) {
+        REQUIRE_LOGIN = true;
+    }
+
+    logoutBtn.classList.toggle('hidden', !REQUIRE_LOGIN);
+}
+
 function checkAuth() {
+    if (!REQUIRE_LOGIN) {
+        showDashboard();
+        return;
+    }
+
     if (state.token) {
         showDashboard();
     } else {
@@ -66,6 +84,8 @@ async function handleLogin() {
 }
 
 function handleLogout() {
+    if (!REQUIRE_LOGIN) return;
+
     state.token = null;
     localStorage.removeItem('douyin_token');
     checkAuth();
@@ -113,9 +133,10 @@ async function handleExtract() {
     }
 
     try {
+        const headers = REQUIRE_LOGIN && state.token ? { 'x-api-key': state.token } : {};
         const res = await axios.get('/api/live', {
             params: { url: url },
-            headers: { 'x-api-key': state.token }
+            headers
         });
 
         if (res.data.success) {
@@ -125,7 +146,7 @@ async function handleExtract() {
             addToHistory(res.data.data, url);
         }
     } catch (err) {
-        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+        if (REQUIRE_LOGIN && err.response && (err.response.status === 401 || err.response.status === 403)) {
             // Token expired or invalid
             handleLogout();
             loginError.textContent = '会话已过期，请重新登录。';
@@ -490,4 +511,9 @@ loginBtn.onclick = handleLogin;
 logoutBtn.onclick = handleLogout;
 extractBtn.onclick = handleExtract;
 
-checkAuth();
+async function init() {
+    await loadAppConfig();
+    checkAuth();
+}
+
+init();
