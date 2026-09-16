@@ -4,7 +4,14 @@ const state = {
     token: localStorage.getItem('douyin_token') || null,
     currentUrl: '',
     player: null,
-    latencyTimer: null
+    latencyTimer: null,
+    currentStream: null,
+    reconnectController: null,
+    reconnectAttempts: 0,
+    lastReconnectAt: -Infinity,
+    cdnStreams: {},
+    cdnRun: null,
+    cdnResult: null
 };
 
 // Elements
@@ -30,6 +37,22 @@ const reloadBtn = document.getElementById('reload-btn');
 const fullscreenBtn = document.getElementById('fullscreen-btn');
 const qualitySelect = document.getElementById('quality-select');
 const autoLatencyToggle = document.getElementById('auto-latency-toggle');
+const syncModeSelect = document.getElementById('sync-mode');
+const syncModeHint = document.getElementById('sync-mode-hint');
+const syncStatus = document.getElementById('sync-status');
+const cdnSection = document.getElementById('cdn-section');
+const cdnQualitySelect = document.getElementById('cdn-quality-select');
+const cdnTestBtn = document.getElementById('cdn-test-btn');
+const cdnCancelBtn = document.getElementById('cdn-cancel-btn');
+const cdnUseBestBtn = document.getElementById('cdn-use-best-btn');
+const cdnExtraUrls = document.getElementById('cdn-extra-urls');
+const cdnStatus = document.getElementById('cdn-status');
+const cdnResults = document.getElementById('cdn-results');
+const cdnCurrent = document.getElementById('cdn-current');
+
+try {
+    syncModeSelect.value = localStorage.getItem('douyin_sync_mode') === 'smooth' ? 'smooth' : 'fresh';
+} catch (err) { /* Keep the default when storage is unavailable. */ }
 
 // --- Auth Logic ---
 
@@ -86,6 +109,7 @@ async function handleLogin() {
 function handleLogout() {
     if (!REQUIRE_LOGIN) return;
 
+    destroyPlayer();
     state.token = null;
     localStorage.removeItem('douyin_token');
     checkAuth();
@@ -102,6 +126,7 @@ async function handleExtract() {
     infoSection.classList.add('hidden');
     qualitySection.classList.add('hidden');
     playerContainer.classList.add('hidden');
+    cdnSection.classList.add('hidden');
     destroyPlayer();
 
     // Direct Stream Support
@@ -125,7 +150,7 @@ async function handleExtract() {
         addToHistory(directData, url);
 
         // Auto play
-        playStream(url, type);
+        playStream(url, type, 'original');
 
         extractBtn.textContent = '解析';
         extractBtn.disabled = false;
@@ -166,14 +191,15 @@ function renderInfo(data) {
     infoSection.classList.remove('hidden');
 }
 
-function renderQualities(data) {
+function renderQualities(data, preferredType = 'flv') {
+    updateCdnSources(data.flv || {});
     qualityButtons.innerHTML = '';
 
     // Combine FLV and HLS for selection
     // Prefer FLV as it's usually lower latency
     const streams = [];
 
-    if (data.flv) {
+    if (data.flv && preferredType !== 'm3u8') {
         Object.keys(data.flv).forEach(key => {
             streams.push({ type: 'flv', key, ...data.flv[key] });
         });
@@ -196,20 +222,20 @@ function renderQualities(data) {
         btn.onclick = () => {
             document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            playStream(stream.url, stream.type);
+            playStream(stream.url, stream.type, stream.key);
         };
         qualityButtons.appendChild(btn);
 
         // Populate dropdown
         const option = document.createElement('option');
-        option.value = JSON.stringify({ url: stream.url, type: stream.type });
+        option.value = JSON.stringify({ url: stream.url, type: stream.type, key: stream.key });
         option.textContent = `${stream.label} (${stream.type})`;
         qualitySelect.appendChild(option);
     });
 
     // Select first one by default in dropdown if exists
     if (streams.length > 0) {
-        qualitySelect.value = JSON.stringify({ url: streams[0].url, type: streams[0].type });
+        qualitySelect.value = JSON.stringify({ url: streams[0].url, type: streams[0].type, key: streams[0].key });
     }
 
     qualitySection.classList.remove('hidden');
@@ -218,21 +244,52 @@ function renderQualities(data) {
 // --- Player Logic ---
 
 function destroyPlayer() {
+    cancelCdnTest();
+    stopLatencyMonitor();
+    cancelReconnect();
+    state.currentStream = null;
+    videoElement.onloadedmetadata = null;
     if (state.player) {
         if (state.player.destroy) state.player.destroy();
         // HLS.js uses destroy(), flv.js also destroy()
         state.player = null;
     }
-    stopLatencyMonitor();
     // Also stop video element
     videoElement.pause();
-    videoElement.src = '';
+    videoElement.removeAttribute('src');
     videoElement.load();
 }
 
-function playStream(url, type) {
+function playStream(url, type, key = null, reconnecting = false, cdnSelected = false, autoplay = true) {
     destroyPlayer();
+    if (!reconnecting) {
+        state.reconnectAttempts = 0;
+        state.lastReconnectAt = -Infinity;
+    }
+    const stream = { url, type, key, failed: false, wantsPlay: autoplay, playRequested: false, cdnSelected };
+    state.currentStream = stream;
+    cdnCurrent.textContent = cdnSelected ? `在播线路：${new URL(url).host}（测速选择）` : '在播线路：平台默认';
+    syncStatus.textContent = reconnecting ? '正在连接最新直播画面…' : '正在加载直播…';
     playerContainer.classList.remove('hidden');
+
+    const fail = () => {
+        if (state.currentStream !== stream) return;
+        stream.failed = true;
+        syncStatus.textContent = '直播连接中断；可点击“同步直播”或“重新加载”重试。';
+    };
+    const play = () => {
+        if (state.currentStream !== stream || !stream.wantsPlay) return;
+        stream.playRequested = true;
+        videoElement.play().catch(err => {
+            if (state.currentStream !== stream) return;
+            if (err.name === 'NotAllowedError') {
+                stream.wantsPlay = false;
+                syncStatus.textContent = '请点击视频播放按钮开始观看。';
+            } else if (err.name !== 'AbortError') {
+                fail();
+            }
+        });
+    };
 
     // Handle FLV
     if (type === 'flv' || url.endsWith('.flv')) {
@@ -248,12 +305,14 @@ function playStream(url, type) {
                 lazyLoad: false,
                 autoCleanupSourceBuffer: true
             });
+            state.player = player;
+            player.on(flvjs.Events.ERROR, fail);
             player.attachMediaElement(videoElement);
             player.load();
-            player.play().catch(e => console.error("Auto-play blocked", e));
-            state.player = player;
+            play();
         } else {
-            console.error('FLV is not supported in this browser');
+            state.currentStream = null;
+            syncStatus.textContent = '当前浏览器不支持 FLV 播放。';
         }
     }
     // Handle HLS
@@ -264,17 +323,19 @@ function playStream(url, type) {
                 lowLatencyMode: true,
                 backBufferLength: 90
             });
+            state.player = hls;
+            hls.on(Hls.Events.MANIFEST_PARSED, play);
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) fail();
+            });
             hls.loadSource(url);
             hls.attachMedia(videoElement);
-            hls.on(Hls.Events.MANIFEST_PARSED, function () {
-                videoElement.play().catch(e => console.error("Auto-play blocked", e));
-            });
-            state.player = hls;
         } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+            videoElement.onloadedmetadata = play;
             videoElement.src = url;
-            videoElement.addEventListener('loadedmetadata', function () {
-                videoElement.play();
-            });
+        } else {
+            state.currentStream = null;
+            syncStatus.textContent = '当前浏览器不支持 HLS 播放。';
         }
     }
     // Sync dropdown state if needed (playStream might be called from buttons)
@@ -282,7 +343,7 @@ function playStream(url, type) {
     Array.from(qualitySelect.options).forEach(opt => {
         try {
             const val = JSON.parse(opt.value);
-            if (val.url === url) {
+            if (val.url === url || (cdnSelected && val.key === key && val.type === type)) {
                 qualitySelect.value = opt.value;
             }
         } catch (e) { }
@@ -297,17 +358,8 @@ function playStream(url, type) {
 // --- Controls ---
 
 forwardBtn.onclick = () => {
-    // Aggressive Sync to Live Edge
-    if (videoElement.buffered.length > 0) {
-        // Jump to the very end of the buffer minus a tiny safety margin
-        // This forces the player to consume the latest network packet
-        const end = videoElement.buffered.end(videoElement.buffered.length - 1);
-        videoElement.currentTime = end - 0.1;
-        console.log("Synced to live edge:", videoElement.currentTime);
-    } else {
-        // Fallback if no buffer info, just try to nudge forward
-        videoElement.currentTime += 5;
-    }
+    if (syncModeSelect.value === 'fresh') reconnectStream();
+    else seekToLive();
 };
 
 speedSelect.onchange = (e) => {
@@ -316,17 +368,17 @@ speedSelect.onchange = (e) => {
 
 qualitySelect.onchange = (e) => {
     try {
-        const { url, type } = JSON.parse(e.target.value);
-        playStream(url, type);
+        const { url, type, key } = JSON.parse(e.target.value);
+        playStream(url, type, key);
     } catch (err) {
         console.error("Failed to parse quality selection", err);
     }
 };
 
 reloadBtn.onclick = () => {
-    // Re-trigger extraction to get fresh link, then auto-play same quality? 
-    // For simplicity, just re-run extraction.
-    if (state.currentUrl) {
+    if (state.currentStream) reconnectStream();
+    else if (state.currentUrl) {
+        urlInput.value = state.currentUrl;
         handleExtract();
     }
 };
@@ -337,32 +389,139 @@ fullscreenBtn.onclick = () => {
 
 // --- Auto Latency Logic ---
 
+function getLiveTarget() {
+    if (!state.currentStream) return null;
+    const hlsTarget = state.player?.liveSyncPosition;
+    if (Number.isFinite(hlsTarget)) return hlsTarget;
+
+    // Native HLS exposes its sliding live window through seekable.
+    const isHls = state.currentStream.type === 'm3u8';
+    const ranges = isHls && videoElement.seekable.length ? videoElement.seekable : videoElement.buffered;
+    if (!ranges.length) return null;
+    const last = ranges.length - 1;
+    const end = ranges.end(last);
+    return Number.isFinite(end) ? Math.max(ranges.start(last), end - (isHls ? 1 : 0.5)) : null;
+}
+
+function seekToLive() {
+    const target = getLiveTarget();
+    if (target === null) {
+        syncStatus.textContent = '尚无可同步的直播画面，请稍候或点击“重新加载”。';
+        return;
+    }
+    videoElement.currentTime = target;
+    if (autoLatencyToggle.checked) videoElement.playbackRate = 1;
+    syncStatus.textContent = '已跳转到当前可用的直播位置。';
+}
+
+function cancelReconnect() {
+    state.reconnectController?.abort();
+    state.reconnectController = null;
+    forwardBtn.disabled = false;
+    reloadBtn.disabled = false;
+}
+
+async function reconnectStream(automatic = false) {
+    const stream = state.currentStream;
+    if (!stream || state.reconnectController) return;
+    if (automatic) {
+        if (!autoLatencyToggle.checked || syncModeSelect.value !== 'fresh' || !stream.wantsPlay) return;
+        if (state.reconnectAttempts >= 3) {
+            syncStatus.textContent = '连续重连未恢复，已停止自动重试。请检查直播状态后点击“重新加载”。';
+            stopLatencyMonitor();
+            return;
+        }
+        if (Date.now() - state.lastReconnectAt < 15000) return;
+        state.reconnectAttempts++;
+    } else {
+        state.reconnectAttempts = 0;
+    }
+    state.lastReconnectAt = Date.now();
+    const controller = new AbortController();
+    state.reconnectController = controller;
+    forwardBtn.disabled = true;
+    reloadBtn.disabled = true;
+    syncStatus.textContent = '正在重新获取直播并连接，请稍候…';
+
+    try {
+        let { url, type, key, cdnSelected } = stream;
+        // Room links are resolved again to renew expiring stream URLs; direct URLs are re-opened as supplied.
+        if (state.currentUrl && !/\.(flv|m3u8)(?:[?#]|$)/i.test(state.currentUrl) && (!cdnSelected || stream.failed)) {
+            const headers = REQUIRE_LOGIN && state.token ? { 'x-api-key': state.token } : {};
+            const res = await axios.get('/api/live', {
+                params: { url: state.currentUrl }, headers, signal: controller.signal, timeout: 10000
+            });
+            if (controller.signal.aborted || state.currentStream !== stream) return;
+            if (!res.data.success) throw new Error(res.data.error || '直播地址获取失败');
+            const qualities = res.data.data[type === 'flv' ? 'flv' : 'hls'];
+            key = qualities?.[key] ? key : Object.keys(qualities || {})[0];
+            if (!qualities?.[key]?.url) throw new Error('暂无可用直播画面，直播可能已经结束');
+            url = qualities[key].url;
+            cdnSelected = false;
+            renderInfo(res.data.data);
+            renderQualities(res.data.data, type);
+        }
+        if (controller.signal.aborted || state.currentStream !== stream) return;
+        playStream(url, type, key, true, cdnSelected);
+    } catch (err) {
+        if (controller.signal.aborted || state.currentStream !== stream) return;
+        syncStatus.textContent = `重连失败：${err.response?.data?.error || err.message}`;
+        if (err.response?.status === 401 || err.response?.status === 403) stopLatencyMonitor();
+    } finally {
+        if (state.reconnectController === controller) cancelReconnect();
+    }
+}
+
 function startLatencyMonitor() {
     stopLatencyMonitor();
-    if (!state.player) return;
+    if (!state.currentStream) return;
+    let lastTime = videoElement.currentTime;
+    let lastProgressAt = Date.now();
+    let healthySince = null;
+    let lagSince = null;
 
     state.latencyTimer = setInterval(() => {
-        if (videoElement.paused || !videoElement.buffered.length) return;
+        const stream = state.currentStream;
+        const now = Date.now();
+        if (!stream || state.reconnectController) return;
+        if (!stream.wantsPlay || (videoElement.paused && !stream.failed) || videoElement.seeking) {
+            lastTime = videoElement.currentTime;
+            lastProgressAt = now;
+            healthySince = lagSince = null;
+            return;
+        }
 
-        const end = videoElement.buffered.end(videoElement.buffered.length - 1);
-        const latency = end - videoElement.currentTime;
-
-        // Thresholds: > 1.5s Hard Jump, > 0.5s Smooth Speedup
-        if (latency > 1.5) {
-            videoElement.currentTime = end - 0.1;
-            // console.log('Auto-Sync: Hard Jump', latency);
-        } else if (latency > 0.5) {
-            // Only set if not already sped up to avoid constant assignment
-            if (videoElement.playbackRate === 1.0) {
-                videoElement.playbackRate = 1.1;
-                // console.log('Auto-Sync: Speed Up 1.1x', latency);
-            }
+        const progressed = videoElement.currentTime > lastTime + 0.05;
+        lastTime = videoElement.currentTime;
+        if (progressed && !stream.failed) {
+            lastProgressAt = now;
+            healthySince ??= now;
         } else {
-            // Back to normal
-            if (videoElement.playbackRate !== 1.0) {
-                videoElement.playbackRate = 1.0;
-                // console.log('Auto-Sync: Normal', latency);
-            }
+            healthySince = null;
+        }
+
+        const target = getLiveTarget();
+        const lag = target === null ? 0 : target - videoElement.currentTime;
+        if (lag > 3) lagSince ??= now;
+        else lagSince = null;
+        if (healthySince !== null && now - healthySince >= 30000 && lag <= 3) state.reconnectAttempts = 0;
+
+        // HLS segments arrive in batches: allow at least three segment durations before calling playback stalled.
+        const segmentDuration = state.player?.levels?.[state.player.currentLevel]?.details?.targetduration || 0;
+        const stallTimeout = Math.max(15000, segmentDuration * 3000);
+        if (syncModeSelect.value === 'fresh' &&
+            (stream.failed || now - lastProgressAt >= stallTimeout || (lagSince !== null && now - lagSince >= 3000))) {
+            reconnectStream(true);
+            return;
+        }
+        if (target === null || stream.failed) return;
+
+        if (lag > 1.5 && syncModeSelect.value === 'smooth') {
+            seekToLive();
+        } else if (lag > 0.25) {
+            videoElement.playbackRate = 1.1;
+        } else if (lag <= 0.1) {
+            videoElement.playbackRate = 1;
         }
     }, 1000);
 }
@@ -380,6 +539,7 @@ function stopLatencyMonitor() {
 }
 
 autoLatencyToggle.onchange = () => {
+    cancelReconnect();
     updateSpeedControls();
     if (autoLatencyToggle.checked) {
         startLatencyMonitor();
@@ -387,6 +547,43 @@ autoLatencyToggle.onchange = () => {
         stopLatencyMonitor();
     }
 };
+
+syncModeSelect.onchange = () => {
+    cancelReconnect();
+    state.reconnectAttempts = 0;
+    state.lastReconnectAt = -Infinity;
+    try { localStorage.setItem('douyin_sync_mode', syncModeSelect.value); } catch (err) { }
+    updateSyncMode();
+    if (autoLatencyToggle.checked) startLatencyMonitor();
+};
+
+function updateSyncMode() {
+    const fresh = syncModeSelect.value === 'fresh';
+    syncModeHint.textContent = fresh
+        ? '最新画面优先：明显落后或播放停滞时重新连接，可能短暂等待；点击“同步直播”可立即重连。'
+        : '平滑追赶：通过加速和跳转追赶直播，不主动重新连接。';
+    forwardBtn.title = fresh ? '重新连接，获取新的直播画面' : '跳转到当前可用的直播位置';
+    syncStatus.textContent = '';
+}
+
+videoElement.addEventListener('play', () => {
+    if (state.currentStream) {
+        state.currentStream.wantsPlay = true;
+        state.currentStream.playRequested = true;
+    }
+});
+videoElement.addEventListener('pause', () => {
+    // Ignore teardown events until the new stream has actually requested playback.
+    if (!state.currentStream?.playRequested || !videoElement.paused || videoElement.error || state.currentStream.failed) return;
+    state.currentStream.wantsPlay = false;
+    cancelReconnect();
+});
+videoElement.addEventListener('error', () => {
+    if (state.currentStream && videoElement.error) state.currentStream.failed = true;
+});
+videoElement.addEventListener('playing', () => {
+    if (state.currentStream) syncStatus.textContent = '正在播放';
+});
 
 function updateSpeedControls() {
     if (autoLatencyToggle.checked) {
@@ -400,6 +597,141 @@ function updateSpeedControls() {
 
 // Init speed controls state
 updateSpeedControls();
+updateSyncMode();
+
+// --- CDN freshness comparison ---
+
+function setCdnBusy(busy) {
+    cdnTestBtn.disabled = busy || !Object.keys(state.cdnStreams).length;
+    cdnCancelBtn.disabled = !busy;
+    cdnQualitySelect.disabled = busy;
+    cdnExtraUrls.disabled = busy;
+    cdnUseBestBtn.disabled = busy || !state.cdnResult?.best;
+}
+
+function cancelCdnTest() {
+    const run = state.cdnRun;
+    if (!run) return;
+    state.cdnRun = null;
+    run.controller.abort();
+    setCdnBusy(false);
+    cdnStatus.textContent = '测速已取消。';
+}
+
+function updateCdnSources(streams) {
+    cancelCdnTest();
+    state.cdnStreams = streams;
+    state.cdnResult = null;
+    cdnQualitySelect.innerHTML = '';
+    for (const [key, stream] of Object.entries(streams)) {
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = stream.label || key;
+        cdnQualitySelect.appendChild(option);
+    }
+    cdnQualitySelect.value = streams.SD1 ? 'SD1' : Object.keys(streams)[0] || '';
+    cdnSection.classList.toggle('hidden', !Object.keys(streams).length);
+    cdnResults.innerHTML = '';
+    cdnStatus.textContent = '选择画质后开始测速。';
+    setCdnBusy(false);
+}
+
+function showCdnRows(rows, key, complete = false) {
+    cdnResults.innerHTML = '';
+    const ms = value => value < 1 ? '< 1 ms' : `约 ${Math.round(value)} ms`;
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+        for (const text of [row.host || '未连接', row.eligible ? ms(row.arrivalLagMs) : '—', row.eligible ? ms(row.pictureLagMs) : '—']) {
+            const td = document.createElement('td');
+            td.textContent = text;
+            tr.appendChild(td);
+        }
+        const action = document.createElement('td');
+        if (complete && row.eligible) {
+            const button = document.createElement('button');
+            button.className = 'btn sm'; button.textContent = '使用';
+            button.onclick = () => useCdnResult(row, key);
+            action.appendChild(button);
+        } else action.textContent = row.error || (complete ? '未完成同帧比较' : row.ready ? '预热就绪' : '等待预热');
+        tr.appendChild(action);
+        cdnResults.appendChild(tr);
+    }
+}
+
+function useCdnResult(row, key) {
+    if (state.cdnRun || !row.eligible || state.cdnResult?.key !== key) return;
+    playStream(row.url, 'flv', key, false, true);
+}
+
+async function startCdnTest() {
+    if (state.cdnRun) return;
+    const key = cdnQualitySelect.value;
+    const source = state.cdnStreams[key];
+    if (!source?.url) return;
+    const extras = cdnExtraUrls.value.split(/\s+/).filter(text => /^https?:\/\//i.test(text));
+    if (state.cdnResult?.key === key) extras.push(...state.cdnResult.rows.filter(row => row.eligible).map(row => row.url));
+    if (state.currentStream?.type === 'flv' && state.currentStream.key === key && state.currentStream.url !== source.url) extras.push(state.currentStream.url);
+    const previous = state.currentStream ? { ...state.currentStream, wantsPlay: state.currentStream.wantsPlay && !videoElement.paused } : null;
+    destroyPlayer();
+    const run = { controller: new AbortController(), previous };
+    state.cdnRun = run;
+    state.cdnResult = null;
+    setCdnBusy(true);
+    cdnResults.innerHTML = '';
+    cdnStatus.textContent = '正在发现可用线路…';
+    const progress = info => {
+        if (state.cdnRun !== run) return;
+        showCdnRows(info.nodes, key);
+        if (info.phase === 'discover') cdnStatus.textContent = `正在发现线路：已找到 ${info.nodes.length} / 5 条（第 ${info.attempt} 次请求）…`;
+        else if (info.phase === 'warmup') cdnStatus.textContent = `正在预热：${info.nodes.filter(n => n.ready).length} / ${info.nodes.length} 条就绪，已等待 ${Math.floor(info.elapsed)} 秒…`;
+        else cdnStatus.textContent = `正在比较相同画面，剩余约 ${info.remaining} 秒…`;
+    };
+    try {
+        const discovered = await CdnTester.discover(source.url, extras, run.controller.signal, progress);
+        if (state.cdnRun !== run) return;
+        if (discovered.nodes.length < 2) {
+            showCdnRows(discovered.nodes, key);
+            const detail = discovered.failures.at(-1)?.error;
+            cdnStatus.textContent = `仅发现 ${discovered.nodes.length} 条可用线路，无法比较。可补充同画质备用地址。${detail ? ' ' + detail : ''}`;
+            return;
+        }
+        const result = await CdnTester.measure(discovered.nodes, run.controller.signal, progress);
+        if (state.cdnRun !== run) return;
+        state.cdnResult = { ...result, key };
+        showCdnRows(result.rows, key, true);
+        cdnStatus.textContent = result.error || `${source.label || key}：预热 ${result.warmupSeconds.toFixed(1)} 秒后，匹配 ${result.matchedFrames} 个相同画面。结果仅对应本次测速，不足 1 ms 可视为并列。`;
+    } catch (err) {
+        if (state.cdnRun === run) cdnStatus.textContent = err.name === 'AbortError' ? run.cancelReason || '测速已取消。' : `测速失败：${err.message}`;
+    } finally {
+        if (state.cdnRun === run) {
+            state.cdnRun = null;
+            setCdnBusy(false);
+            if (previous) playStream(previous.url, previous.type, previous.key, false, previous.cdnSelected, previous.wantsPlay);
+        }
+    }
+}
+
+cdnTestBtn.onclick = startCdnTest;
+cdnCancelBtn.onclick = () => state.cdnRun?.controller.abort();
+cdnUseBestBtn.onclick = () => {
+    if (state.cdnResult?.best) useCdnResult(state.cdnResult.best, state.cdnResult.key);
+};
+cdnQualitySelect.onchange = () => {
+    state.cdnResult = null;
+    cdnResults.innerHTML = '';
+    cdnStatus.textContent = '已切换测速画质；备用地址也应与此画质一致。';
+    setCdnBusy(false);
+};
+window.addEventListener('pagehide', () => {
+    cancelCdnTest();
+    destroyPlayer();
+});
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden && state.cdnRun) {
+        state.cdnRun.cancelReason = '页面已进入后台，测速已取消；请保持页面在前台后重试。';
+        state.cdnRun.controller.abort();
+    }
+});
 
 // --- History Logic ---
 

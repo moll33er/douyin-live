@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
     <meta charset="UTF-8">
@@ -67,6 +67,36 @@
                     </div>
                 </div>
 
+                <section id="cdn-section" class="card hidden" aria-labelledby="cdn-heading">
+                    <h3 id="cdn-heading">线路测速 · 选择最新画面</h3>
+                    <p class="cdn-help">预热后比较相同画面的到达时间，最多 5 条线路。测速会暂停当前拉流，结束后恢复。</p>
+                    <div class="cdn-toolbar">
+                        <div class="control-field">
+                            <label for="cdn-quality-select">测速画质：</label>
+                            <select id="cdn-quality-select"></select>
+                        </div>
+                        <button id="cdn-test-btn" class="btn sm">开始测速</button>
+                        <button id="cdn-cancel-btn" class="btn sm" disabled>取消</button>
+                        <button id="cdn-use-best-btn" class="btn sm" disabled>使用最新线路</button>
+                    </div>
+                    <p class="cdn-help">默认标清以减少带宽争用；结果仅适用于所选画质，使用线路时也会切换到该画质。</p>
+                    <details class="cdn-alternatives">
+                        <summary>补充备用地址（可选）</summary>
+                        <label for="cdn-extra-urls">同一直播、同一画质的 FLV 地址，每行一条</label>
+                        <textarea id="cdn-extra-urls" rows="3" maxlength="20000" placeholder="https://…/stream.flv?…"></textarea>
+                        <p class="cdn-help">自动发现数量取决于平台调度。仅支持浏览器可跨域读取的 H.264 FLV 线路。</p>
+                    </details>
+                    <p id="cdn-status" class="cdn-status" role="status" aria-live="polite">选择画质后开始测速。</p>
+                    <div class="cdn-table-wrap">
+                        <table class="cdn-table">
+                            <caption class="cdn-help">数据接收侧的比较；同帧差取中位值，画面落后取测量结束时的进度。</caption>
+                            <thead><tr><th scope="col">线路</th><th scope="col">同帧到达差</th><th scope="col">画面落后</th><th scope="col">操作 / 状态</th></tr></thead>
+                            <tbody id="cdn-results"></tbody>
+                        </table>
+                    </div>
+                    <p id="cdn-current" class="cdn-help">在播线路：平台默认</p>
+                </section>
+
                 <div id="player-container" class="card hidden">
                     <video id="video-player" controls></video>
                     <div class="controls-bar">
@@ -76,27 +106,43 @@
                             <button id="fullscreen-btn" class="btn sm">全屏</button>
                         </div>
                         <div class="speed-controls">
-                            <label>画质：</label>
-                            <select id="quality-select">
-                                <option value="" disabled selected>自动</option>
-                            </select>
+                            <div class="control-field">
+                                <label for="quality-select">画质：</label>
+                                <select id="quality-select">
+                                    <option value="" disabled selected>自动</option>
+                                </select>
+                            </div>
+                            <div class="control-field">
+                                <label for="sync-mode">同步模式：</label>
+                                <select id="sync-mode" aria-describedby="sync-mode-hint">
+                                    <option value="smooth">平滑追赶</option>
+                                    <option value="fresh" selected>最新画面优先</option>
+                                </select>
+                            </div>
                             <label class="checkbox-label">
                                 <input type="checkbox" id="auto-latency-toggle" checked> 自动同步
                             </label>
-                            <label>倍速：</label>
-                            <select id="speed-select">
-                                <option value="0.5">0.5x</option>
-                                <option value="1.0" selected>1.0x</option>
-                                <option value="1.25">1.25x</option>
-                                <option value="1.5">1.5x</option>
-                                <option value="2.0">2.0x</option>
-                            </select>
+                            <div class="control-field">
+                                <label for="speed-select">倍速：</label>
+                                <select id="speed-select">
+                                    <option value="0.5">0.5x</option>
+                                    <option value="1.0" selected>1.0x</option>
+                                    <option value="1.25">1.25x</option>
+                                    <option value="1.5">1.5x</option>
+                                    <option value="2.0">2.0x</option>
+                                </select>
+                            </div>
                         </div>
+                    </div>
+                    <div class="sync-info">
+                        <p id="sync-mode-hint"></p>
+                        <p id="sync-status" role="status" aria-live="polite"></p>
                     </div>
                 </div>
             </main>
         </div>
     </div>
+    <script src="cdn-tester.js"></script>
     <script src="script.js"></script>
 </body>
 

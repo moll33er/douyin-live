@@ -336,6 +336,8 @@ video {
 .controls-bar {
     padding: 16px;
     display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
     justify-content: space-between;
     align-items: center;
     background-color: var(--card-bg);
@@ -353,15 +355,45 @@ video {
 
 .playback-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
 }
 
 .speed-controls {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     color: var(--text-sec);
     font-size: 14px;
+}
+
+.speed-controls label {
+    margin-bottom: 0;
+}
+
+.control-field,
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.checkbox-label input {
+    width: auto;
+}
+
+.sync-info {
+    padding: 0 16px 12px;
+    background: var(--card-bg);
+    color: var(--text-sec);
+    font-size: 13px;
+    line-height: 1.6;
+    flex-shrink: 0;
+}
+
+#sync-status:empty {
+    display: none;
 }
 
 select {
@@ -372,3 +404,32 @@ select {
     border-radius: 4px;
     outline: none;
 }
+
+.cdn-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0;
+}
+
+.cdn-toolbar label { margin: 0; }
+.cdn-help { color: var(--text-sec); font-size: 13px; line-height: 1.6; }
+.cdn-alternatives { margin-top: 12px; }
+.cdn-alternatives summary { cursor: pointer; margin-bottom: 10px; }
+.cdn-alternatives textarea {
+    width: 100%;
+    padding: 10px;
+    resize: vertical;
+    background: #2b2c31;
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.cdn-status { margin: 12px 0; line-height: 1.5; font-size: 14px; }
+.cdn-table-wrap { overflow-x: auto; }
+.cdn-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 13px; }
+.cdn-table caption { text-align: left; caption-side: bottom; padding: 8px 0; }
+.cdn-table th, .cdn-table td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.cdn-table td:first-child { max-width: 220px; overflow-wrap: anywhere; }
+.btn:disabled { opacity: 0.45; cursor: default; }
