@@ -49,6 +49,7 @@ const cdnExtraUrls = document.getElementById('cdn-extra-urls');
 const cdnStatus = document.getElementById('cdn-status');
 const cdnResults = document.getElementById('cdn-results');
 const cdnCurrent = document.getElementById('cdn-current');
+const cdnPreviews = document.getElementById('cdn-previews');
 
 try {
     syncModeSelect.value = localStorage.getItem('douyin_sync_mode') === 'smooth' ? 'smooth' : 'fresh';
@@ -249,6 +250,7 @@ function destroyPlayer() {
     cancelReconnect();
     state.currentStream = null;
     videoElement.onloadedmetadata = null;
+    videoElement.oncanplay = null;
     if (state.player) {
         if (state.player.destroy) state.player.destroy();
         // HLS.js uses destroy(), flv.js also destroy()
@@ -268,6 +270,14 @@ function playStream(url, type, key = null, reconnecting = false, cdnSelected = f
     }
     const stream = { url, type, key, failed: false, wantsPlay: autoplay, playRequested: false, cdnSelected };
     state.currentStream = stream;
+    if (cdnSelected && autoplay) videoElement.oncanplay = () => {
+        if (state.currentStream !== stream || !stream.wantsPlay) return;
+        if (CdnTester.chase(videoElement)) {
+            stream.startupChaseUntil = Date.now() + 3000;
+            videoElement.oncanplay = null;
+            syncStatus.textContent = '所选线路已加载，并已追到当前可用直播位置。';
+        }
+    };
     cdnCurrent.textContent = cdnSelected ? `在播线路：${new URL(url).host}（测速选择）` : '在播线路：平台默认';
     syncStatus.textContent = reconnecting ? '正在连接最新直播画面…' : '正在加载直播…';
     playerContainer.classList.remove('hidden');
@@ -484,6 +494,10 @@ function startLatencyMonitor() {
         const stream = state.currentStream;
         const now = Date.now();
         if (!stream || state.reconnectController) return;
+        if (stream.startupChaseUntil > now && !videoElement.paused && videoElement.buffered.length &&
+            videoElement.buffered.end(videoElement.buffered.length - 1) - videoElement.currentTime > 0.8) {
+            CdnTester.chase(videoElement);
+        }
         if (!stream.wantsPlay || (videoElement.paused && !stream.failed) || videoElement.seeking) {
             lastTime = videoElement.currentTime;
             lastProgressAt = now;
@@ -638,10 +652,11 @@ function updateCdnSources(streams) {
 
 function showCdnRows(rows, key, complete = false) {
     cdnResults.innerHTML = '';
-    const ms = value => value < 1 ? '< 1 ms' : `约 ${Math.round(value)} ms`;
+    const ms = value => value == null ? '—' : value < 1 ? '< 1 ms' : `约 ${Math.round(value)} ms`;
     for (const row of rows) {
         const tr = document.createElement('tr');
-        for (const text of [row.host || '未连接', row.eligible ? ms(row.arrivalLagMs) : '—', row.eligible ? ms(row.pictureLagMs) : '—']) {
+        for (const text of [row.host || '未连接', row.loadMs == null ? '等待加载' : `${(row.loadMs / 1000).toFixed(1)} 秒`,
+            `${row.chases || 0} / ${row.reconnects || 0}`, row.eligible ? ms(row.arrivalLagMs) : '—', row.eligible ? ms(row.pictureLagMs) : '—']) {
             const td = document.createElement('td');
             td.textContent = text;
             tr.appendChild(td);
@@ -652,7 +667,7 @@ function showCdnRows(rows, key, complete = false) {
             button.className = 'btn sm'; button.textContent = '使用';
             button.onclick = () => useCdnResult(row, key);
             action.appendChild(button);
-        } else action.textContent = row.error || (complete ? '未完成同帧比较' : row.ready ? '预热就绪' : '等待预热');
+        } else action.textContent = row.error || (complete ? '未判定' : row.stage || (row.pending ? '加载待确认' : '等待试播'));
         tr.appendChild(action);
         cdnResults.appendChild(tr);
     }
@@ -682,8 +697,9 @@ async function startCdnTest() {
     const progress = info => {
         if (state.cdnRun !== run) return;
         showCdnRows(info.nodes, key);
-        if (info.phase === 'discover') cdnStatus.textContent = `正在发现线路：已找到 ${info.nodes.length} / 5 条（第 ${info.attempt} 次请求）…`;
-        else if (info.phase === 'warmup') cdnStatus.textContent = `正在预热：${info.nodes.filter(n => n.ready).length} / ${info.nodes.length} 条就绪，已等待 ${Math.floor(info.elapsed)} 秒…`;
+        if (info.phase === 'discover') cdnStatus.textContent = `正在发现线路：已有 ${info.nodes.length} / 5 条候选（第 ${info.attempt} 次请求）…`;
+        else if (info.phase === 'prepare') cdnStatus.textContent = `正在加载、追帧和核验重连：${info.nodes.filter(n => n.ready).length} / ${info.nodes.length} 条就绪，已用 ${Math.floor(info.elapsed)} 秒…`;
+        else if (info.phase === 'align') cdnStatus.textContent = '正在核对不同时间段的共同画面，避免漏掉大幅领先的线路…';
         else cdnStatus.textContent = `正在比较相同画面，剩余约 ${info.remaining} 秒…`;
     };
     try {
@@ -695,11 +711,11 @@ async function startCdnTest() {
             cdnStatus.textContent = `仅发现 ${discovered.nodes.length} 条可用线路，无法比较。可补充同画质备用地址。${detail ? ' ' + detail : ''}`;
             return;
         }
-        const result = await CdnTester.measure(discovered.nodes, run.controller.signal, progress);
+        const result = await CdnTester.measure(discovered.nodes, run.controller.signal, progress, cdnPreviews);
         if (state.cdnRun !== run) return;
         state.cdnResult = { ...result, key };
         showCdnRows(result.rows, key, true);
-        cdnStatus.textContent = result.error || `${source.label || key}：预热 ${result.warmupSeconds.toFixed(1)} 秒后，匹配 ${result.matchedFrames} 个相同画面。结果仅对应本次测速，不足 1 ms 可视为并列。`;
+        cdnStatus.textContent = result.error || `${source.label || key}：加载追帧及时间轴核验用时 ${result.warmupSeconds.toFixed(1)} 秒。处理后窗口匹配 ${result.matchedFrames} 个相同画面，按画面进度推荐；加载耗时不参与排名。`;
     } catch (err) {
         if (state.cdnRun === run) cdnStatus.textContent = err.name === 'AbortError' ? run.cancelReason || '测速已取消。' : `测速失败：${err.message}`;
     } finally {

@@ -69,7 +69,7 @@
 
                 <section id="cdn-section" class="card hidden" aria-labelledby="cdn-heading">
                     <h3 id="cdn-heading">线路测速 · 选择最新画面</h3>
-                    <p class="cdn-help">预热后比较相同画面的到达时间，最多 5 条线路。测速会暂停当前拉流，结束后恢复。</p>
+                    <p class="cdn-help">每条线路先加载试播、追帧，必要时重连，再比较处理后的画面进度，最多 5 条。测速会暂停当前拉流，结束后恢复。</p>
                     <div class="cdn-toolbar">
                         <div class="control-field">
                             <label for="cdn-quality-select">测速画质：</label>
@@ -87,10 +87,11 @@
                         <p class="cdn-help">自动发现数量取决于平台调度。仅支持浏览器可跨域读取的 H.264 FLV 线路。</p>
                     </details>
                     <p id="cdn-status" class="cdn-status" role="status" aria-live="polite">选择画质后开始测速。</p>
+                    <div id="cdn-previews" class="cdn-previews" aria-label="各线路静音试播画面"></div>
                     <div class="cdn-table-wrap">
                         <table class="cdn-table">
-                            <caption class="cdn-help">数据接收侧的比较；同帧差取中位值，画面落后取测量结束时的进度。</caption>
-                            <thead><tr><th scope="col">线路</th><th scope="col">同帧到达差</th><th scope="col">画面落后</th><th scope="col">操作 / 状态</th></tr></thead>
+                            <caption class="cdn-help">首帧加载耗时不参与排名。先核对试播已追到缓冲末端，再比较收到的画面进度；同帧差可能因窗口不重叠而留空。存在未判定线路时不推荐全部候选中的最新线路。</caption>
+                            <thead><tr><th scope="col">线路</th><th scope="col">首帧加载</th><th scope="col">追帧 / 重连</th><th scope="col">同帧到达差</th><th scope="col">处理后画面落后</th><th scope="col">操作 / 状态</th></tr></thead>
                             <tbody id="cdn-results"></tbody>
                         </table>
                     </div>

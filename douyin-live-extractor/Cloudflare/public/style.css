@@ -428,6 +428,10 @@ select {
 }
 .cdn-status { margin: 12px 0; line-height: 1.5; font-size: 14px; }
 .cdn-table-wrap { overflow-x: auto; }
+.cdn-previews { display: flex; flex-wrap: wrap; gap: 8px; }
+.cdn-previews figure { width: 140px; margin: 0 0 10px; }
+.cdn-previews video { width: 140px; height: 79px; object-fit: contain; }
+.cdn-previews figcaption { font-size: 11px; color: var(--text-sec); overflow-wrap: anywhere; }
 .cdn-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 13px; }
 .cdn-table caption { text-align: left; caption-side: bottom; padding: 8px 0; }
 .cdn-table th, .cdn-table td { padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border); }
