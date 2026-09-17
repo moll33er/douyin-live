@@ -846,6 +846,8 @@ document.addEventListener('click', (e) => {
 // Hook into extraction success to save history
 // Called from handleExtract
 function addToHistory(data, url) {
+    // Offline room metadata must not replace history; direct streams have no status.
+    if (data.status !== undefined && Number(data.status) !== 2) return;
     saveHistory({
         url: url,
         title: data.title,

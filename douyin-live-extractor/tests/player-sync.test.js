@@ -85,6 +85,47 @@ test('both deployable frontends stay identical', () => {
     }
 });
 
+test('offline room extraction leaves history untouched and live rooms still update it', async () => {
+    let data;
+    const h = setup({ liveResponse: () => ({ data: { success: true, data } }) });
+    const url = 'https://live.douyin.com/123';
+    const original = JSON.stringify([
+        { url: 'https://live.douyin.com/456', title: '其他直播', anchor_name: '其他主播', timestamp: 20 },
+        { url, title: '原直播标题', anchor_name: '原主播', timestamp: 10 }
+    ]);
+    h.storage.set('douyin_history', original);
+    for (const status of [0, 4, '4', null]) {
+        data = { status, title: '', anchor_name: '', flv: {}, hls: {} };
+        for (const roomUrl of [url, 'https://live.douyin.com/789']) {
+            h.elements.get('url-input').value = roomUrl;
+            await h.run('handleExtract()');
+            assert.equal(h.storage.get('douyin_history'), original);
+        }
+    }
+    h.elements.get('url-input').value = url;
+    for (const status of [2, '2']) {
+        data = { status, title: '新直播标题', anchor_name: '主播新名字', flv: { hd: { url: 'https://cdn/live.flv' } } };
+        await h.run('handleExtract()');
+        const history = JSON.parse(h.storage.get('douyin_history'));
+        assert.equal(history.length, 2);
+        assert.deepEqual(history[0], { url, title: data.title, anchor_name: data.anchor_name, timestamp: 100000 });
+        assert.deepEqual(history[1], JSON.parse(original)[0]);
+    }
+});
+
+test('direct FLV and HLS extraction still saves history without a room status', async () => {
+    const h = setup();
+    for (const type of ['flv', 'm3u8']) {
+        const url = `https://cdn/live.${type}?token=test`;
+        h.elements.get('url-input').value = url;
+        await h.run('handleExtract()');
+        const history = JSON.parse(h.storage.get('douyin_history'));
+        assert.equal(history[0].url, url);
+        assert.equal(history[0].anchor_name, '直链');
+    }
+    assert.equal(JSON.parse(h.storage.get('douyin_history')).length, 2);
+});
+
 test('smooth mode accelerates, restores speed, and seeks without reconnecting', async () => {
     const h = setup({ mode: 'smooth' });
     h.start();
