@@ -11,6 +11,7 @@ const state = {
     reconnectAttempts: 0,
     lastReconnectAt: -Infinity,
     cdnStreams: {},
+    cdnRoom: null,
     cdnRun: null,
     cdnResult: null,
     qualityRun: null,
@@ -133,7 +134,7 @@ function handleLogout() {
 // --- Extraction Logic ---
 
 async function handleExtract() {
-    const url = urlInput.value;
+    const url = urlInput.value.trim();
     if (!url) return;
 
     extractBtn.textContent = '解析中...';
@@ -181,10 +182,14 @@ async function handleExtract() {
         });
 
         if (res.data.success) {
-            renderInfo(res.data.data);
-            renderQualities(res.data.data);
-            state.currentUrl = url; // Save for reload
-            addToHistory(res.data.data, url);
+            const data = res.data.data;
+            // Share texts and short links are replaced by the room number, which reloads and history reuse.
+            const room = data.web_rid || roomNumber(url) || url;
+            renderInfo(data);
+            renderQualities(data);
+            state.currentUrl = room; // Save for reload
+            urlInput.value = room;
+            addToHistory(data, room);
         }
     } catch (err) {
         if (REQUIRE_LOGIN && err.response && (err.response.status === 401 || err.response.status === 403)) {
@@ -208,7 +213,7 @@ function renderInfo(data) {
 }
 
 function renderQualities(data, preferredType = 'flv') {
-    updateCdnSources(data.flv || {});
+    updateCdnSources(data.flv || {}, data.web_rid || null);
     qualityButtons.innerHTML = '';
 
     // Combine FLV and HLS for selection
@@ -757,9 +762,23 @@ function cancelCdnTest() {
     cdnStatus.textContent = '测速已取消。';
 }
 
-function updateCdnSources(streams) {
+function updateCdnSources(streams, room = null) {
     cancelCdnTest();
-    state.cdnStreams = streams;
+    // Each parse may be dispatched to another CDN, so unexpired addresses from earlier parses of
+    // the same room remain line candidates.
+    const previous = room && state.cdnRoom === room ? state.cdnStreams : {};
+    // Direct links are kept as typed, so an address may not parse as a URL.
+    const hostOf = url => { try { return new URL(url).host; } catch (err) { return url; } };
+    state.cdnRoom = room;
+    state.cdnStreams = Object.fromEntries(Object.entries(streams).map(([key, stream]) => {
+        const hosts = new Set([hostOf(stream.url)]);
+        const earlier = [previous[key]?.url, ...(previous[key]?.candidates || [])].filter(url => url && !urlExpiring(url));
+        const candidates = [...(stream.candidates || []), ...earlier].filter(url => {
+            const host = hostOf(url);
+            return !hosts.has(host) && hosts.add(host);
+        });
+        return [key, { ...stream, candidates }];
+    }));
     state.cdnResult = null;
     cdnQualitySelect.innerHTML = '';
     for (const [key, stream] of Object.entries(streams)) {
@@ -810,6 +829,7 @@ async function startCdnTest() {
     const source = state.cdnStreams[key];
     if (!source?.url) return;
     const extras = cdnExtraUrls.value.split(/\s+/).filter(text => /^https?:\/\//i.test(text));
+    extras.push(...source.candidates || []);
     if (state.cdnResult?.key === key) extras.push(...state.cdnResult.rows.filter(row => row.eligible).map(row => row.url));
     if (state.currentStream?.type === 'flv' && state.currentStream.key === key && state.currentStream.url !== source.url) extras.push(state.currentStream.url);
     const previous = state.currentStream ? { ...state.currentStream, wantsPlay: state.currentStream.wantsPlay && !videoElement.paused } : null;
@@ -977,10 +997,15 @@ qualityCompareA.onchange = qualityCompareB.onchange = () => {
 
 const historyDropdown = document.getElementById('history-dropdown');
 
+function roomNumber(text) {
+    return String(text).trim().match(/^(?:https?:\/\/live\.douyin\.com\/)?(\d+)(?:[/?#]\S*)?$/)?.[1] || null;
+}
+
 function loadHistory() {
     try {
         const hist = JSON.parse(localStorage.getItem('douyin_history')) || [];
-        return hist;
+        // Older entries stored room page URLs; history now keeps room numbers.
+        return hist.map(item => ({ ...item, url: roomNumber(item.url) || item.url }));
     } catch (e) {
         return [];
     }

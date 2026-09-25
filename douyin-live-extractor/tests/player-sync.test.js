@@ -123,9 +123,43 @@ test('offline room extraction leaves history untouched and live rooms still upda
         await h.run('handleExtract()');
         const history = JSON.parse(h.storage.get('douyin_history'));
         assert.equal(history.length, 2);
-        assert.deepEqual(history[0], { url, title: data.title, anchor_name: data.anchor_name, timestamp: 100000 });
-        assert.deepEqual(history[1], JSON.parse(original)[0]);
+        assert.deepEqual(history[0], { url: '123', title: data.title, anchor_name: data.anchor_name, timestamp: 100000 });
+        assert.deepEqual(history[1], { ...JSON.parse(original)[0], url: '456' });
     }
+});
+
+test('share text resolves to the room number for the input, reloads and history', async () => {
+    const h = setup({ liveResponse: () => ({ data: { success: true, data: {
+        web_rid: '12345678901', status: 2, title: '直播', anchor_name: '主播', flv: { hd: { url: 'https://cdn/live.flv' } }
+    } } }) });
+    const share = '1- #在抖音，记录美好生活#【主播】正在直播，来和我一起支持Ta吧。复制下方链接，打开【抖音】，直接观看直播！ https://v.douyin.com/AbCdEfGh123/ 0@9.com :5pm';
+    h.elements.get('url-input').value = share;
+    await h.run('handleExtract()');
+    assert.equal(h.requests[0].params.url, share);
+    assert.equal(h.elements.get('url-input').value, '12345678901');
+    assert.equal(h.run('state.currentUrl'), '12345678901');
+    assert.equal(JSON.parse(h.storage.get('douyin_history'))[0].url, '12345678901');
+});
+
+test('line candidates from the server and earlier parses of the same room reach discovery', async () => {
+    const soon = Math.floor(100000 / 1000) + 30, later = Math.floor(100000 / 1000) + 3600;
+    let data, extras;
+    const h = setup({
+        liveResponse: () => ({ data: { success: true, data } }),
+        cdnTester: { discover: async (url, list) => { extras = list; return { nodes: [], failures: [] }; } }
+    });
+    const parse = async (room, sd1) => {
+        data = { web_rid: room, status: 2, title: '直播', anchor_name: '主播', flv: { SD1: sd1 } };
+        h.elements.get('url-input').value = room;
+        await h.run('handleExtract()');
+    };
+    await parse('1', { url: `https://a/ld.flv?expire=${later}`, candidates: [`https://b/ld.flv?expire=${later}`, `https://a/other.flv?expire=${later}`, `https://f/ld.flv?expire=${soon}`] });
+    await parse('1', { url: `https://c/ld.flv?expire=${later}`, candidates: [`https://d/ld.flv?expire=${later}`] });
+    await h.run('startCdnTest()');
+    assert.deepEqual([...extras], [`https://d/ld.flv?expire=${later}`, `https://a/ld.flv?expire=${later}`, `https://b/ld.flv?expire=${later}`]);
+    await parse('2', { url: `https://e/ld.flv?expire=${later}` });
+    await h.run('startCdnTest()');
+    assert.deepEqual([...extras], []);
 });
 
 test('direct FLV and HLS extraction still saves history without a room status', async () => {
@@ -139,6 +173,14 @@ test('direct FLV and HLS extraction still saves history without a room status', 
         assert.equal(history[0].anchor_name, '直链');
     }
     assert.equal(JSON.parse(h.storage.get('douyin_history')).length, 2);
+});
+
+test('a direct link pasted without a scheme still opens instead of locking extraction', async () => {
+    const h = setup();
+    h.elements.get('url-input').value = 'cdn/live.flv?token=test';
+    await h.run('handleExtract()');
+    assert.equal(h.elements.get('extract-btn').disabled, false);
+    assert.equal(h.run('state.currentStream.url'), 'cdn/live.flv?token=test');
 });
 
 test('smooth mode accelerates, restores speed, and seeks without reconnecting', async () => {
