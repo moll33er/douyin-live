@@ -13,6 +13,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
     let now = 100000;
     let timerId = 0;
     const timers = new Map();
+    const timeouts = new Map();
     const players = [];
     const requests = [];
     const storage = new Map([['douyin_sync_mode', mode]]);
@@ -30,8 +31,9 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
     }
     const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map((match) => [match[1], element()]));
     const video = elements.get('video-player');
-    Object.assign(video, {
-        currentTime: 0, playbackRate: 1, paused: true, seeking: false, readyState: 0, error: null,
+    const standby = elements.get('video-standby');
+    for (const media of [video, standby]) Object.assign(media, {
+        currentTime: 0, playbackRate: 1, paused: true, seeking: false, readyState: 0, error: null, muted: false,
         buffered: ranges(0, 0), seekable: ranges(0, 0),
         pause() { this.paused = true; this.emit('pause'); },
         play() { this.paused = false; this.emit('play'); return Promise.resolve(); },
@@ -42,8 +44,8 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
     class Player {
         constructor() { this.events = new Map(); players.push(this); }
         on(event, fn) { this.events.set(event, fn); }
-        attachMediaElement() { video.readyState = 4; }
-        attachMedia() { video.readyState = 4; this.events.get('manifest')?.(); }
+        attachMediaElement(media) { media.readyState = 4; this.media = media; }
+        attachMedia(media) { media.readyState = 4; this.media = media; this.events.get('manifest')?.(); }
         loadSource(url) { this.url = url; }
         load() {}
         destroy() { this.destroyed = true; }
@@ -60,8 +62,9 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
             return liveResponse ? liveResponse(options) : { data: { success: true, data: { title: '直播', flv: { hd: { url: 'https://cdn/new.flv', label: '高清' } } } } };
         } },
         flvjs: { isSupported: () => true, Events: { ERROR: 'error' }, createPlayer: () => new Player() }, Hls: Player,
-        Date: { now: () => now }, AbortController, URL, console, alert() {},
-        setInterval: fn => { timers.set(++timerId, fn); return timerId; }, clearInterval: id => timers.delete(id)
+        Date: { now: () => now }, AbortController, DOMException, URL, console, alert() {},
+        setInterval: fn => { timers.set(++timerId, fn); return timerId; }, clearInterval: id => timers.delete(id),
+        setTimeout: (fn, ms) => { timeouts.set(++timerId, { fn, at: now + ms }); return timerId; }, clearTimeout: id => timeouts.delete(id)
     });
     if (!cdnTester) vm.runInContext(cdnSource, context);
     vm.runInContext(source, context);
@@ -73,12 +76,22 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
     const tick = async (seconds = 1, advance = 0) => {
         for (let i = 0; i < seconds; i++) {
             now += 1000;
-            video.currentTime += advance;
+            run('videoElement').currentTime += advance;
+            for (const [id, timeout] of [...timeouts]) if (timeout.at <= now) { timeouts.delete(id); timeout.fn(); }
             for (const fn of [...timers.values()]) fn();
             await Promise.resolve();
         }
     };
-    return { run, start, tick, video, elements, players, requests, storage, timers };
+    // Lets the connection loading in the standby element become playable, then waits for the swap.
+    const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+    const ready = async () => {
+        await flush();
+        const media = run('standbyVideo');
+        media.buffered = ranges(0, 4);
+        media.emit('canplay');
+        await flush();
+    };
+    return { run, start, tick, flush, ready, video, standby, elements, players, requests, storage, timers, timeouts };
 }
 
 test('both deployable frontends stay identical', () => {
@@ -184,6 +197,8 @@ test('fresh mode reconnects when jumping cannot clear a persistent lag', async (
     assert.equal(h.players.length, 1);
     await h.tick();
     assert.equal(h.players.length, 2);
+    assert.ok(!h.players[0].destroyed, 'the current picture stays until the new connection is ready');
+    await h.ready();
     assert.ok(h.players[0].destroyed);
     assert.equal(h.timers.size, 1);
 });
@@ -315,11 +330,13 @@ test('healthy playback replenishes the automatic retry budget', async () => {
     assert.equal(h.run('state.reconnectAttempts'), 0);
 });
 
-test('room reconnect refreshes its URL and retains the selected quality', async () => {
+test('room reload refreshes its URL and retains the selected quality', async () => {
     const h = setup();
     h.start();
     h.run("state.currentUrl = 'https://live.douyin.com/123'");
-    await h.run('reconnectStream()');
+    const reload = h.run('reconnectStream(false, true)');
+    await h.ready();
+    await reload;
     assert.equal(h.requests[0].params.url, 'https://live.douyin.com/123');
     assert.equal(h.requests[0].timeout, 10000);
     assert.equal(h.run('state.currentStream.url'), 'https://cdn/new.flv');
@@ -334,7 +351,9 @@ test('an HLS reconnect keeps the quality selector consistent when FLV becomes av
     } } }) });
     h.start('m3u8');
     h.run("state.currentUrl = 'https://live.douyin.com/123'");
-    await h.run('reconnectStream()');
+    const reload = h.run('reconnectStream(false, true)');
+    await h.ready();
+    await reload;
     assert.equal(h.run('state.currentStream.type'), 'm3u8');
     assert.equal(JSON.parse(h.elements.get('quality-select').value).url, 'https://cdn/new.m3u8');
 });
@@ -344,7 +363,7 @@ test('switching streams discards a late reconnect response', async () => {
     const h = setup({ liveResponse: () => new Promise(done => { resolve = done; }) });
     h.start();
     h.run("state.currentUrl = 'https://live.douyin.com/123'");
-    const reconnect = h.run('reconnectStream()');
+    const reconnect = h.run('reconnectStream(false, true)');
     h.run("playStream('https://cdn/other.flv', 'flv', 'other')");
     assert.equal(h.requests[0].signal.aborted, true);
     resolve({ data: { success: true, data: { flv: { hd: { url: 'https://cdn/stale.flv' } } } } });
@@ -358,7 +377,7 @@ test('mode changes cancel pending reconnects and keep only one monitor', async (
     const h = setup({ liveResponse: () => new Promise(done => { resolve = done; }) });
     h.start();
     h.run("state.currentUrl = 'https://live.douyin.com/123'");
-    const reconnect = h.run('reconnectStream(true)');
+    const reconnect = h.run('reconnectStream(true, true)');
     h.elements.get('sync-mode').value = 'smooth';
     h.elements.get('sync-mode').onchange();
     assert.equal(h.requests[0].signal.aborted, true);
@@ -369,9 +388,101 @@ test('mode changes cancel pending reconnects and keep only one monitor', async (
     assert.equal(h.elements.get('forward-btn').disabled, false);
 });
 
+test('reconnects reuse a valid room URL and only resolve broken or expiring ones', async () => {
+    const h = setup();
+    h.start();
+    h.run("state.currentUrl = 'https://live.douyin.com/123'");
+    let reconnect = h.run('reconnectStream()');
+    await h.ready(); await reconnect;
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.run('state.currentStream.url'), 'https://cdn/live.flv');
+    h.run("playStream('https://cdn/live.flv?expire=100000', 'flv', 'hd')");
+    reconnect = h.run('reconnectStream()');
+    await h.ready(); await reconnect;
+    assert.equal(h.requests.length, 0, 'a URL far from expiry is reopened as is');
+    h.run("playStream('https://cdn/live.flv?expire=130', 'flv', 'hd')");
+    reconnect = h.run('reconnectStream()');
+    await h.ready(); await reconnect;
+    assert.equal(h.requests.length, 1, 'a URL expiring within a minute is renewed');
+    assert.equal(h.run('state.currentStream.url'), 'https://cdn/new.flv');
+    h.run('state.currentStream.failed = true');
+    await h.run('reconnectStream()');
+    assert.equal(h.requests.length, 2, 'a failed connection is renewed');
+});
+
+test('reconnecting a playing stream keeps its picture until the caught-up replacement takes over', async () => {
+    const h = setup();
+    h.start();
+    const first = h.run('videoElement');
+    first.volume = 0.4;
+    h.elements.get('forward-btn').onclick();
+    const second = h.run('standbyVideo');
+    assert.equal(second.muted, true);
+    assert.equal(h.players.length, 2);
+    assert.equal(h.run('state.player'), h.players[0]);
+    assert.equal(first.paused, false);
+    assert.match(h.elements.get('sync-status').textContent, /当前画面继续播放/);
+    await h.ready();
+    assert.equal(h.run('videoElement'), second);
+    assert.equal(h.run('standbyVideo'), first);
+    assert.equal(second.muted, false);
+    assert.equal(second.volume, 0.4);
+    assert.ok(Math.abs(second.currentTime - 3.65) < 1e-9, 'the replacement starts from its newest buffered picture');
+    assert.ok(h.players[0].destroyed);
+    assert.equal(h.players[0].media, first);
+    assert.equal(h.run('state.player'), h.players[1]);
+    assert.equal(first.paused, true);
+    assert.equal(h.run('state.currentStream.wantsPlay'), true, 'retiring the old element is not a user pause');
+    assert.equal(h.elements.get('forward-btn').disabled, false);
+    assert.equal(h.timers.size, 1);
+});
+
+test('a replacement that fails or times out keeps the current picture and renews the room URL next time', async () => {
+    const h = setup();
+    h.start();
+    h.run("state.currentUrl = 'https://live.douyin.com/123'");
+    const first = h.run('videoElement');
+    let reconnect = h.run('reconnectStream()');
+    h.players[1].events.get('error')();
+    await reconnect;
+    assert.equal(h.run('videoElement'), first);
+    assert.ok(h.players[1].destroyed);
+    assert.ok(!h.players[0].destroyed);
+    assert.equal(h.run('state.player'), h.players[0]);
+    assert.match(h.elements.get('sync-status').textContent, /新连接未能就绪.*继续播放当前画面/);
+    assert.equal(h.requests.length, 0);
+    reconnect = h.run('reconnectStream()');
+    await h.flush();
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.players.length, 3);
+    await h.tick(10);
+    await reconnect;
+    assert.equal(h.run('videoElement'), first);
+    assert.ok(h.players[2].destroyed);
+    assert.ok(!h.players[0].destroyed);
+    assert.match(h.elements.get('sync-status').textContent, /加载超时/);
+    assert.equal(h.timeouts.size, 0);
+    assert.equal(h.elements.get('forward-btn').disabled, false);
+});
+
+test('switching streams while a replacement loads discards it', async () => {
+    const h = setup();
+    h.start();
+    const reconnect = h.run('reconnectStream()');
+    const replacement = h.players[1];
+    h.run("playStream('https://cdn/other.flv', 'flv', 'other')");
+    await reconnect;
+    assert.ok(replacement.destroyed);
+    assert.equal(h.run('state.standby'), null);
+    assert.equal(h.timeouts.size, 0);
+    assert.equal(h.run('state.currentStream.url'), 'https://cdn/other.flv');
+    assert.equal(h.run('state.player'), h.players[2]);
+});
+
 test('benchmark resumes playback and applying its result preserves the selected node on reconnect', async () => {
     const best = { url: 'https://edge/live.flv', host: 'edge', eligible: true, arrivalLagMs: 0, pictureLagMs: 0 };
     const h = setup({ cdnTester: {
+        chase: () => true,
         discover: async () => ({ nodes: [best, { url: 'https://second/live.flv' }], failures: [] }),
         measure: async () => ({ rows: [best], best, warmupSeconds: 10, matchedFrames: 100 })
     } });
@@ -385,7 +496,9 @@ test('benchmark resumes playback and applying its result preserves the selected 
     assert.equal(h.run('state.currentStream.url'), best.url);
     assert.equal(h.run('state.currentStream.cdnSelected'), true);
     assert.equal(JSON.parse(h.elements.get('quality-select').value).key, 'hd');
-    await h.run('reconnectStream()');
+    const reconnect = h.run('reconnectStream()');
+    await h.ready();
+    await reconnect;
     assert.equal(h.run('state.currentStream.url'), best.url);
     assert.equal(h.requests.length, 0);
     h.run('state.currentStream.failed = true');

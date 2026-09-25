@@ -7,6 +7,7 @@ const state = {
     latencyTimer: null,
     currentStream: null,
     reconnectController: null,
+    standby: null,
     reconnectAttempts: 0,
     lastReconnectAt: -Infinity,
     cdnStreams: {},
@@ -31,7 +32,9 @@ const infoSection = document.getElementById('info-section');
 const qualitySection = document.getElementById('quality-section');
 const qualityButtons = document.getElementById('quality-buttons');
 const playerContainer = document.getElementById('player-container');
-const videoElement = document.getElementById('video-player');
+// The on-screen player and a hidden one that loads replacement connections; they swap roles on reconnect.
+let videoElement = document.getElementById('video-player');
+let standbyVideo = document.getElementById('video-standby');
 
 const speedSelect = document.getElementById('speed-select');
 const forwardBtn = document.getElementById('forward-btn');
@@ -256,58 +259,67 @@ function renderQualities(data, preferredType = 'flv') {
 
 // --- Player Logic ---
 
+function resetVideo(video) {
+    video.onloadedmetadata = null;
+    video.oncanplay = null;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+}
+
 function destroyPlayer() {
     cancelCdnTest();
     cancelQualityTest();
     stopLatencyMonitor();
     cancelReconnect();
     state.currentStream = null;
-    videoElement.onloadedmetadata = null;
-    videoElement.oncanplay = null;
     if (state.player) {
         if (state.player.destroy) state.player.destroy();
         // HLS.js uses destroy(), flv.js also destroy()
         state.player = null;
     }
-    // Also stop video element
-    videoElement.pause();
-    videoElement.removeAttribute('src');
-    videoElement.load();
+    resetVideo(videoElement);
 }
 
-function playStream(url, type, key = null, reconnecting = false, cdnSelected = false, autoplay = true) {
-    destroyPlayer();
-    if (!reconnecting) {
-        state.reconnectAttempts = 0;
-        state.lastReconnectAt = -Infinity;
-    }
-    const stream = { url, type, key, failed: false, wantsPlay: autoplay, playRequested: false, cdnSelected };
-    state.currentStream = stream;
+function closeStandby() {
+    const standby = state.standby;
+    if (!standby) return;
+    state.standby = null;
+    standby.player?.destroy?.();
+    resetVideo(standbyVideo);
+}
+
+// A stream may drive its callbacks while it is on screen or while it is loading in the standby element.
+const ownsStream = stream => state.currentStream === stream || state.standby?.stream === stream;
+
+// Attaches a live connection to `video`; returns the flv.js/hls.js player (null for native HLS).
+function openStream(video, stream) {
+    const { url, type, cdnSelected } = stream;
     const isFlv = type === 'flv' || url.endsWith('.flv');
     // Live FLV connections start with the CDN's cached GOP; skip it once the first picture is playable.
-    if (isFlv && autoplay) videoElement.oncanplay = () => {
-        if (state.currentStream !== stream || !stream.wantsPlay) return;
-        if (CdnTester.chase(videoElement)) {
+    if (stream.wantsPlay) video.oncanplay = () => {
+        if (!ownsStream(stream) || !stream.wantsPlay) return;
+        if (isFlv) {
+            if (!CdnTester.chase(video)) return;
             stream.startupChaseUntil = Date.now() + 3000;
-            videoElement.oncanplay = null;
-            if (cdnSelected) syncStatus.textContent = '所选线路已加载，并已追到当前可用直播位置。';
         }
+        video.oncanplay = null;
+        if (cdnSelected && state.currentStream === stream) syncStatus.textContent = '所选线路已加载，并已追到当前可用直播位置。';
+        stream.onReady?.();
     };
-    cdnCurrent.textContent = cdnSelected ? `在播线路：${new URL(url).host}（测速选择）` : '在播线路：平台默认';
-    syncStatus.textContent = reconnecting ? '正在连接最新直播画面…' : '正在加载直播…';
-    playerContainer.classList.remove('hidden');
 
     const fail = () => {
-        if (state.currentStream !== stream) return;
+        if (!ownsStream(stream)) return;
         stream.failed = true;
-        syncStatus.textContent = '直播连接中断；可点击“同步直播”或“重新加载”重试。';
+        if (state.currentStream === stream) syncStatus.textContent = '直播连接中断；可点击“同步直播”或“重新加载”重试。';
+        stream.onFail?.();
     };
     const play = () => {
-        if (state.currentStream !== stream || !stream.wantsPlay) return;
+        if (!ownsStream(stream) || !stream.wantsPlay) return;
         stream.playRequested = true;
-        videoElement.play().catch(err => {
-            if (state.currentStream !== stream) return;
-            if (err.name === 'NotAllowedError') {
+        video.play().catch(err => {
+            if (!ownsStream(stream)) return;
+            if (err.name === 'NotAllowedError' && state.currentStream === stream) {
                 stream.wantsPlay = false;
                 syncStatus.textContent = '请点击视频播放按钮开始观看。';
             } else if (err.name !== 'AbortError') {
@@ -318,53 +330,53 @@ function playStream(url, type, key = null, reconnecting = false, cdnSelected = f
 
     // Handle FLV
     if (isFlv) {
-        if (flvjs.isSupported()) {
-            const player = flvjs.createPlayer({
-                type: 'flv',
-                url: url,
-                isLive: true,
-                hasAudio: true,
-                hasVideo: true
-            }, {
-                enableStashBuffer: false, // Reduce latency
-                lazyLoad: false,
-                autoCleanupSourceBuffer: true
-            });
-            state.player = player;
-            player.on(flvjs.Events.ERROR, fail);
-            player.attachMediaElement(videoElement);
-            player.load();
-            play();
-        } else {
-            state.currentStream = null;
-            syncStatus.textContent = '当前浏览器不支持 FLV 播放。';
-        }
+        if (!flvjs.isSupported()) throw new Error('当前浏览器不支持 FLV 播放。');
+        const player = flvjs.createPlayer({
+            type: 'flv',
+            url: url,
+            isLive: true,
+            hasAudio: true,
+            hasVideo: true
+        }, {
+            enableStashBuffer: false, // Reduce latency
+            lazyLoad: false,
+            autoCleanupSourceBuffer: true
+        });
+        player.on(flvjs.Events.ERROR, fail);
+        player.attachMediaElement(video);
+        player.load();
+        play();
+        return player;
     }
     // Handle HLS
-    else if (type === 'm3u8' || url.endsWith('.m3u8')) {
+    if (type === 'm3u8' || url.endsWith('.m3u8')) {
         if (Hls.isSupported()) {
             const hls = new Hls({
                 enableWorker: true,
                 lowLatencyMode: true,
                 backBufferLength: 90
             });
-            state.player = hls;
             hls.on(Hls.Events.MANIFEST_PARSED, play);
             hls.on(Hls.Events.ERROR, (event, data) => {
                 if (data.fatal) fail();
             });
             hls.loadSource(url);
-            hls.attachMedia(videoElement);
-        } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
-            videoElement.onloadedmetadata = play;
-            videoElement.src = url;
-        } else {
-            state.currentStream = null;
-            syncStatus.textContent = '当前浏览器不支持 HLS 播放。';
+            hls.attachMedia(video);
+            return hls;
         }
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.onloadedmetadata = play;
+            video.src = url;
+            return null;
+        }
+        throw new Error('当前浏览器不支持 HLS 播放。');
     }
+    return null;
+}
+
+function activateStream({ url, type, key, cdnSelected }) {
+    cdnCurrent.textContent = cdnSelected ? `在播线路：${new URL(url).host}（测速选择）` : '在播线路：平台默认';
     // Sync dropdown state if needed (playStream might be called from buttons)
-    // Find matching option
     Array.from(qualitySelect.options).forEach(opt => {
         try {
             const val = JSON.parse(opt.value);
@@ -378,6 +390,74 @@ function playStream(url, type, key = null, reconnecting = false, cdnSelected = f
     if (autoLatencyToggle.checked) {
         startLatencyMonitor();
     }
+}
+
+function playStream(url, type, key = null, reconnecting = false, cdnSelected = false, autoplay = true) {
+    destroyPlayer();
+    if (!reconnecting) {
+        state.reconnectAttempts = 0;
+        state.lastReconnectAt = -Infinity;
+    }
+    const stream = { url, type, key, failed: false, wantsPlay: autoplay, playRequested: false, cdnSelected };
+    state.currentStream = stream;
+    syncStatus.textContent = reconnecting ? '正在连接最新直播画面…' : '正在加载直播…';
+    playerContainer.classList.remove('hidden');
+    try {
+        state.player = openStream(videoElement, stream);
+    } catch (err) {
+        state.currentStream = null;
+        syncStatus.textContent = err.message;
+    }
+    activateStream(stream);
+}
+
+// Loads a replacement connection in the hidden standby element; resolves once it has caught up and can play.
+function prepareStandby(url, type, key, cdnSelected, signal) {
+    const stream = { url, type, key, failed: false, wantsPlay: true, playRequested: false, cdnSelected };
+    return new Promise((resolve, reject) => {
+        const finish = err => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', abort);
+            stream.onReady = stream.onFail = null;
+            if (!err) return resolve(stream);
+            if (state.standby?.stream === stream) closeStandby();
+            reject(err);
+        };
+        const abort = () => finish(new DOMException('重连已取消', 'AbortError'));
+        const timer = setTimeout(() => finish(new Error('新连接加载超时')), 10000);
+        stream.onReady = () => finish();
+        stream.onFail = () => finish(new Error('新连接失败'));
+        signal.addEventListener('abort', abort, { once: true });
+        state.standby = { stream, player: null };
+        standbyVideo.muted = true;
+        try {
+            const player = openStream(standbyVideo, stream);
+            if (state.standby?.stream === stream) state.standby.player = player;
+            else player?.destroy?.();
+        } catch (err) {
+            finish(err);
+        }
+    });
+}
+
+function swapToStandby(stream) {
+    const { player } = state.standby;
+    state.standby = null;
+    stopLatencyMonitor();
+    const old = videoElement, oldPlayer = state.player;
+    videoElement = standbyVideo;
+    standbyVideo = old;
+    videoElement.muted = old.muted;
+    videoElement.volume = old.volume;
+    videoElement.playbackRate = parseFloat(speedSelect.value) || 1;
+    videoElement.classList.remove('standby');
+    old.classList.add('standby');
+    state.player = player;
+    state.currentStream = stream;
+    oldPlayer?.destroy?.();
+    resetVideo(old);
+    syncStatus.textContent = '已切换到新连接。';
+    activateStream(stream);
 }
 
 // --- Controls ---
@@ -401,7 +481,7 @@ qualitySelect.onchange = (e) => {
 };
 
 reloadBtn.onclick = () => {
-    if (state.currentStream) reconnectStream();
+    if (state.currentStream) reconnectStream(false, true);
     else if (state.currentUrl) {
         urlInput.value = state.currentUrl;
         handleExtract();
@@ -442,11 +522,17 @@ function seekToLive() {
 function cancelReconnect() {
     state.reconnectController?.abort();
     state.reconnectController = null;
+    closeStandby();
     forwardBtn.disabled = false;
     reloadBtn.disabled = false;
 }
 
-async function reconnectStream(automatic = false) {
+function urlExpiring(url) {
+    const expire = Number(new URL(url).searchParams.get('expire'));
+    return expire > 0 && expire * 1000 - Date.now() < 60000;
+}
+
+async function reconnectStream(automatic = false, renew = false) {
     const stream = state.currentStream;
     if (!stream || state.reconnectController) return;
     if (automatic) {
@@ -470,8 +556,10 @@ async function reconnectStream(automatic = false) {
 
     try {
         let { url, type, key, cdnSelected } = stream;
-        // Room links are resolved again to renew expiring stream URLs; direct URLs are re-opened as supplied.
-        if (state.currentUrl && !/\.(flv|m3u8)(?:[?#]|$)/i.test(state.currentUrl) && (!cdnSelected || stream.failed)) {
+        const room = state.currentUrl && !/\.(flv|m3u8)(?:[?#]|$)/i.test(state.currentUrl);
+        // Signed stream URLs stay valid until `expire`, so a room page is only fetched again when the
+        // address may be broken or stale; direct URLs are re-opened as supplied.
+        if (room && (renew || stream.failed || stream.renewUrl || urlExpiring(url))) {
             const headers = REQUIRE_LOGIN && state.token ? { 'x-api-key': state.token } : {};
             const res = await axios.get('/api/live', {
                 params: { url: state.currentUrl }, headers, signal: controller.signal, timeout: 10000
@@ -487,7 +575,21 @@ async function reconnectStream(automatic = false) {
             renderQualities(res.data.data, type);
         }
         if (controller.signal.aborted || state.currentStream !== stream) return;
-        playStream(url, type, key, true, cdnSelected);
+        // Broken or stalled connections have no picture worth keeping, so they are replaced directly.
+        if (stream.failed || videoElement.paused || videoElement.readyState < 3) {
+            playStream(url, type, key, true, cdnSelected);
+            return;
+        }
+        // Keep the current picture on screen until the new connection has caught up.
+        syncStatus.textContent = '正在后台建立新连接，当前画面继续播放…';
+        const next = await prepareStandby(url, type, key, cdnSelected, controller.signal).catch(err => {
+            if (controller.signal.aborted || state.currentStream !== stream) return null;
+            stream.renewUrl = true;
+            syncStatus.textContent = `新连接未能就绪（${err.message}），继续播放当前画面。`;
+            return null;
+        });
+        if (!next || controller.signal.aborted || state.currentStream !== stream) return;
+        swapToStandby(next);
     } catch (err) {
         if (controller.signal.aborted || state.currentStream !== stream) return;
         syncStatus.textContent = `重连失败：${err.response?.data?.error || err.message}`;
@@ -597,24 +699,29 @@ function updateSyncMode() {
     syncStatus.textContent = '';
 }
 
-videoElement.addEventListener('play', () => {
-    if (state.currentStream) {
+// User-facing events only count for the on-screen element; the standby element reports errors for its own stream.
+for (const video of [videoElement, standbyVideo]) {
+    video.addEventListener('play', () => {
+        if (video !== videoElement || !state.currentStream) return;
         state.currentStream.wantsPlay = true;
         state.currentStream.playRequested = true;
-    }
-});
-videoElement.addEventListener('pause', () => {
-    // Ignore teardown events until the new stream has actually requested playback.
-    if (!state.currentStream?.playRequested || !videoElement.paused || videoElement.error || state.currentStream.failed) return;
-    state.currentStream.wantsPlay = false;
-    cancelReconnect();
-});
-videoElement.addEventListener('error', () => {
-    if (state.currentStream && videoElement.error) state.currentStream.failed = true;
-});
-videoElement.addEventListener('playing', () => {
-    if (state.currentStream) syncStatus.textContent = '正在播放';
-});
+    });
+    video.addEventListener('pause', () => {
+        // Ignore teardown events until the new stream has actually requested playback.
+        if (video !== videoElement || !state.currentStream?.playRequested || !video.paused || video.error || state.currentStream.failed) return;
+        state.currentStream.wantsPlay = false;
+        cancelReconnect();
+    });
+    video.addEventListener('error', () => {
+        const stream = video === videoElement ? state.currentStream : state.standby?.stream;
+        if (!stream || !video.error) return;
+        stream.failed = true;
+        stream.onFail?.();
+    });
+    video.addEventListener('playing', () => {
+        if (video === videoElement && state.currentStream) syncStatus.textContent = '正在播放';
+    });
+}
 
 function updateSpeedControls() {
     if (autoLatencyToggle.checked) {

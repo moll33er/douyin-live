@@ -328,6 +328,15 @@ video {
     background-color: black;
 }
 
+/* Replacement connection loads here, stacked invisibly over the on-screen player until it takes over. */
+#player-container video.standby {
+    position: absolute;
+    top: 0;
+    left: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
 /* Remove default aspect ratio wrapper in fullscreen if any */
 #player-container.web-fullscreen video {
     aspect-ratio: unset;
