@@ -67,6 +67,27 @@
                     </div>
                 </div>
 
+                <section id="quality-compare-section" class="card hidden" aria-labelledby="quality-compare-heading">
+                    <h3 id="quality-compare-heading">画质对比 · 哪个画面更新</h3>
+                    <p class="cdn-help">同时试播两种画质，追帧稳定后比较 20 秒连续画面。测试会暂停当前拉流，结束或取消后恢复。请保持页面在前台。</p>
+                    <div class="cdn-toolbar">
+                        <div class="control-field"><label for="quality-compare-a">画质 A：</label><select id="quality-compare-a"></select></div>
+                        <div class="control-field"><label for="quality-compare-b">画质 B：</label><select id="quality-compare-b"></select></div>
+                        <button id="quality-test-btn" class="btn sm">开始自动对比</button>
+                        <button id="quality-cancel-btn" class="btn sm" disabled>取消</button>
+                        <button id="quality-use-best-btn" class="btn sm" disabled>使用领先画质</button>
+                    </div>
+                    <p id="quality-compare-status" class="cdn-status" role="status" aria-live="polite">解析直播后选择两种画质。</p>
+                    <div id="quality-previews" class="cdn-previews" aria-label="两种画质静音试播画面"></div>
+                    <div class="cdn-table-wrap">
+                        <table class="cdn-table">
+                            <caption class="cdn-help">估算当前两路播放画面的相对延迟，并非摄像头到屏幕的绝对延迟。静止、重复画面、卡顿或差异过小可能无法区分；同时播放会增加带宽与解码负担。支持可跨域播放的 H.264 FLV，时间差超过 8 秒可能无法判定。</caption>
+                            <thead><tr><th scope="col">画质</th><th scope="col">相对画面进度</th></tr></thead>
+                            <tbody id="quality-compare-results"></tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <section id="cdn-section" class="card hidden" aria-labelledby="cdn-heading">
                     <h3 id="cdn-heading">线路测速 · 选择最新画面</h3>
                     <p class="cdn-help">每条线路先加载试播、追帧，必要时重连，再比较处理后的画面进度，最多 5 条。测速会暂停当前拉流，结束后恢复。</p>
@@ -144,6 +165,7 @@
         </div>
     </div>
     <script src="cdn-tester.js"></script>
+    <script src="quality-tester.js"></script>
     <script src="script.js"></script>
 </body>
 

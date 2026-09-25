@@ -8,7 +8,7 @@ const source = readFileSync(new URL('public/script.js', root), 'utf8');
 const html = readFileSync(new URL('public/index.html', root), 'utf8');
 const ranges = (start, end) => ({ length: end > start ? 1 : 0, start: () => start, end: () => end });
 
-function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester } = {}) {
+function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qualityTester } = {}) {
     let now = 100000;
     let timerId = 0;
     const timers = new Map();
@@ -51,7 +51,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester } = 
     Player.Events = { MANIFEST_PARSED: 'manifest', ERROR: 'error' };
     const context = vm.createContext({
         document: { getElementById: id => elements.get(id), createElement: element, addEventListener() {}, querySelectorAll: () => [] },
-        window: { addEventListener() {} }, CdnTester: cdnTester,
+        window: { addEventListener() {} }, CdnTester: cdnTester, QualityTester: qualityTester,
         localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
         axios: { get: async (url, options) => {
             if (url === '/api/config') return { data: { requireLogin: false } };
@@ -80,7 +80,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester } = 
 }
 
 test('both deployable frontends stay identical', () => {
-    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js']) {
+    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js', 'quality-tester.js']) {
         assert.equal(readFileSync(new URL(`public/${file}`, root), 'utf8'), readFileSync(new URL(`Cloudflare/public/${file}`, root), 'utf8'));
     }
 });
@@ -377,4 +377,58 @@ test('cancelling a benchmark restores a paused player without autoplay', async (
     assert.equal(h.run('state.currentStream.wantsPlay'), false);
     assert.equal(h.timers.size, 1);
     assert.match(h.elements.get('cdn-status').textContent, /取消/);
+});
+
+const qualityData = "{flv:{ORIGIN:{url:'https://cdn/original.flv',label:'原画'},SD1:{url:'https://cdn/sd.flv',label:'标清'}}}";
+test('quality comparison restores playback, recommends the selected winner and clears stale results', async () => {
+    const h = setup({ qualityTester: { measure: async sources => {
+        assert.equal(sources[0].key, 'SD1'); assert.equal(sources[1].key, 'ORIGIN');
+        return { eligible: true, bestIndex: 1, deltaMs: -600, uncertaintyMs: 200, matchedFrames: 120 };
+    } } });
+    h.run(`renderQualities(${qualityData})`); h.start();
+    await h.run('startQualityTest()');
+    assert.ok(h.players[0].destroyed);
+    assert.equal(h.run('state.currentStream.url'), 'https://cdn/live.flv');
+    assert.match(h.elements.get('quality-compare-status').textContent, /原画.*0.6 秒/);
+    assert.equal(h.elements.get('quality-use-best-btn').disabled, false);
+    h.elements.get('quality-use-best-btn').onclick();
+    assert.equal(h.run('state.currentStream.key'), 'ORIGIN');
+    h.elements.get('quality-compare-b').value = 'SD1';
+    h.elements.get('quality-compare-b').onchange();
+    assert.equal(h.run('state.qualityResult'), null);
+    assert.equal(h.elements.get('quality-test-btn').disabled, true);
+});
+
+test('switching rooms or streams aborts quality comparison and discards late results', async () => {
+    let resolve, signal;
+    const h = setup({ qualityTester: { measure: (sources, s) => { signal = s; return new Promise(done => { resolve = done; }); } } });
+    h.run(`renderQualities(${qualityData})`); h.start();
+    const task = h.run('startQualityTest()');
+    assert.equal(h.elements.get('cdn-test-btn').disabled, true);
+    await h.run('startCdnTest()');
+    assert.equal(h.run('state.cdnRun'), null);
+    h.run("playStream('https://new/room.flv', 'flv', 'other')");
+    assert.equal(signal.aborted, true);
+    resolve({ eligible: true, bestIndex: 0, deltaMs: 800, uncertaintyMs: 200, matchedFrames: 80 });
+    await task;
+    assert.equal(h.run('state.currentStream.url'), 'https://new/room.flv');
+    assert.equal(h.run('state.qualityResult'), null);
+    assert.equal(h.elements.get('quality-cancel-btn').disabled, true);
+});
+
+test('cancelling quality comparison preserves paused playback and uncertain results cannot be applied', async () => {
+    const qualityTester = { measure: (sources, signal) => new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })), { once: true });
+    }) };
+    const h = setup({ qualityTester });
+    h.run(`renderQualities(${qualityData})`); h.start(); h.video.pause();
+    const task = h.run('startQualityTest()');
+    h.elements.get('quality-cancel-btn').onclick(); await task;
+    assert.equal(h.video.paused, true);
+    assert.equal(h.run('state.currentStream.wantsPlay'), false);
+    assert.match(h.elements.get('quality-compare-status').textContent, /取消/);
+    qualityTester.measure = async () => ({ eligible: false, error: '重复画面' });
+    await h.run('startQualityTest()');
+    assert.equal(h.elements.get('quality-use-best-btn').disabled, true);
+    assert.match(h.elements.get('quality-compare-status').textContent, /无法判定.*重复画面/);
 });

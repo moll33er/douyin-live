@@ -11,7 +11,9 @@ const state = {
     lastReconnectAt: -Infinity,
     cdnStreams: {},
     cdnRun: null,
-    cdnResult: null
+    cdnResult: null,
+    qualityRun: null,
+    qualityResult: null
 };
 
 // Elements
@@ -50,6 +52,15 @@ const cdnStatus = document.getElementById('cdn-status');
 const cdnResults = document.getElementById('cdn-results');
 const cdnCurrent = document.getElementById('cdn-current');
 const cdnPreviews = document.getElementById('cdn-previews');
+const qualityCompareSection = document.getElementById('quality-compare-section');
+const qualityCompareA = document.getElementById('quality-compare-a');
+const qualityCompareB = document.getElementById('quality-compare-b');
+const qualityTestBtn = document.getElementById('quality-test-btn');
+const qualityCancelBtn = document.getElementById('quality-cancel-btn');
+const qualityUseBestBtn = document.getElementById('quality-use-best-btn');
+const qualityStatus = document.getElementById('quality-compare-status');
+const qualityResults = document.getElementById('quality-compare-results');
+const qualityPreviews = document.getElementById('quality-previews');
 
 try {
     syncModeSelect.value = localStorage.getItem('douyin_sync_mode') === 'smooth' ? 'smooth' : 'fresh';
@@ -128,6 +139,7 @@ async function handleExtract() {
     qualitySection.classList.add('hidden');
     playerContainer.classList.add('hidden');
     cdnSection.classList.add('hidden');
+    qualityCompareSection.classList.add('hidden');
     destroyPlayer();
 
     // Direct Stream Support
@@ -246,6 +258,7 @@ function renderQualities(data, preferredType = 'flv') {
 
 function destroyPlayer() {
     cancelCdnTest();
+    cancelQualityTest();
     stopLatencyMonitor();
     cancelReconnect();
     state.currentStream = null;
@@ -616,11 +629,12 @@ updateSyncMode();
 // --- CDN freshness comparison ---
 
 function setCdnBusy(busy) {
-    cdnTestBtn.disabled = busy || !Object.keys(state.cdnStreams).length;
+    cdnTestBtn.disabled = busy || !!state.qualityRun || !Object.keys(state.cdnStreams).length;
     cdnCancelBtn.disabled = !busy;
     cdnQualitySelect.disabled = busy;
     cdnExtraUrls.disabled = busy;
-    cdnUseBestBtn.disabled = busy || !state.cdnResult?.best;
+    cdnUseBestBtn.disabled = busy || !!state.qualityRun || !state.cdnResult?.best;
+    setQualityBusy();
 }
 
 function cancelCdnTest() {
@@ -648,6 +662,7 @@ function updateCdnSources(streams) {
     cdnResults.innerHTML = '';
     cdnStatus.textContent = '选择画质后开始测速。';
     setCdnBusy(false);
+    updateQualitySources();
 }
 
 function showCdnRows(rows, key, complete = false) {
@@ -674,12 +689,12 @@ function showCdnRows(rows, key, complete = false) {
 }
 
 function useCdnResult(row, key) {
-    if (state.cdnRun || !row.eligible || state.cdnResult?.key !== key) return;
+    if (state.cdnRun || state.qualityRun || !row.eligible || state.cdnResult?.key !== key) return;
     playStream(row.url, 'flv', key, false, true);
 }
 
 async function startCdnTest() {
-    if (state.cdnRun) return;
+    if (state.cdnRun || state.qualityRun) return;
     const key = cdnQualitySelect.value;
     const source = state.cdnStreams[key];
     if (!source?.url) return;
@@ -748,6 +763,110 @@ document.addEventListener('visibilitychange', () => {
         state.cdnRun.controller.abort();
     }
 });
+
+// --- Cross-quality picture comparison ---
+
+function setQualityBusy() {
+    const busy = !!state.qualityRun || !!state.cdnRun;
+    qualityTestBtn.disabled = busy || Object.keys(state.cdnStreams).length < 2 || qualityCompareA.value === qualityCompareB.value;
+    qualityCancelBtn.disabled = !state.qualityRun;
+    qualityCompareA.disabled = qualityCompareB.disabled = busy;
+    qualityUseBestBtn.disabled = busy || !state.qualityResult?.best;
+}
+
+function cancelQualityTest() {
+    const run = state.qualityRun;
+    if (!run) return;
+    state.qualityRun = null;
+    run.controller.abort();
+    qualityStatus.textContent = '画质对比已取消。';
+    setCdnBusy(!!state.cdnRun);
+}
+
+function updateQualitySources() {
+    cancelQualityTest();
+    state.qualityResult = null;
+    qualityResults.innerHTML = '';
+    const keys = Object.keys(state.cdnStreams);
+    for (const select of [qualityCompareA, qualityCompareB]) {
+        select.innerHTML = '';
+        for (const key of keys) {
+            const option = document.createElement('option');
+            option.value = key; option.textContent = state.cdnStreams[key].label || key;
+            select.appendChild(option);
+        }
+    }
+    qualityCompareA.value = state.cdnStreams.SD1 ? 'SD1' : keys[0] || '';
+    qualityCompareB.value = keys.find(key => key !== qualityCompareA.value) || '';
+    qualityCompareSection.classList.toggle('hidden', !keys.length);
+    qualityStatus.textContent = keys.length < 2 ? '此直播只有一种可用 FLV 画质，无法对比。' : '选择两种画质，自动估算当前哪一路画面领先。';
+    setQualityBusy();
+}
+
+async function startQualityTest() {
+    if (state.qualityRun || state.cdnRun) return;
+    const keys = [qualityCompareA.value, qualityCompareB.value];
+    if (keys[0] === keys[1] || keys.some(key => !state.cdnStreams[key]?.url)) return;
+    const sources = keys.map(key => ({ ...state.cdnStreams[key], key }));
+    const previous = state.currentStream ? { ...state.currentStream, wantsPlay: state.currentStream.wantsPlay && !videoElement.paused } : null;
+    destroyPlayer();
+    const run = { controller: new AbortController() };
+    state.qualityRun = run;
+    state.qualityResult = null;
+    qualityResults.innerHTML = '';
+    qualityStatus.textContent = '正在加载两种画质并追到可播放的直播位置…';
+    setCdnBusy(false);
+    try {
+        const result = await QualityTester.measure(sources, run.controller.signal, info => {
+            if (state.qualityRun !== run) return;
+            qualityStatus.textContent = info.phase === 'prepare' ? '正在加载、追帧并等待播放稳定…' : `正在比较连续画面，剩余约 ${info.remaining} 秒…`;
+        }, qualityPreviews);
+        if (state.qualityRun !== run) return;
+        if (!result.eligible) {
+            qualityStatus.textContent = `无法判定：${result.error}`;
+            return;
+        }
+        const best = result.bestIndex === null ? null : sources[result.bestIndex];
+        state.qualityResult = { ...result, best };
+        const lag = [Math.max(0, -result.deltaMs), Math.max(0, result.deltaMs)];
+        sources.forEach((source, i) => {
+            const tr = document.createElement('tr');
+            for (const text of [source.label || source.key,
+                result.bestIndex === null ? '差异不足以区分' : lag[i] === 0 ? '本次领先' : `约落后 ${(lag[i] / 1000).toFixed(1)} 秒`]) {
+                const td = document.createElement('td'); td.textContent = text; tr.appendChild(td);
+            }
+            qualityResults.appendChild(tr);
+        });
+        qualityStatus.textContent = `${best ? `${best.label || best.key} 本次画面领先约 ${(Math.abs(result.deltaMs) / 1000).toFixed(1)} 秒。` : '两种画质近似同步，暂不推荐切换。'}连续匹配 ${result.matchedFrames} 组画面，估算容差约 ${(result.uncertaintyMs / 1000).toFixed(1)} 秒；仅适用于本次两路试播。`;
+    } catch (err) {
+        if (state.qualityRun === run) qualityStatus.textContent = err.name === 'AbortError' ? '画质对比已取消。' : `无法判定：${err.message}`;
+    } finally {
+        if (state.qualityRun === run) {
+            state.qualityRun = null;
+            setCdnBusy(false);
+            if (previous) playStream(previous.url, previous.type, previous.key, false, previous.cdnSelected, previous.wantsPlay);
+        }
+    }
+}
+
+qualityTestBtn.onclick = startQualityTest;
+qualityCancelBtn.onclick = () => state.qualityRun?.controller.abort();
+qualityUseBestBtn.onclick = () => {
+    const best = state.qualityResult?.best;
+    if (best && !state.qualityRun && !state.cdnRun) {
+        playStream(best.url, 'flv', best.key);
+        const stream = state.currentStream;
+        videoElement.oncanplay = () => {
+            if (state.currentStream === stream && stream?.wantsPlay && CdnTester.chase(videoElement)) videoElement.oncanplay = null;
+        };
+    }
+};
+qualityCompareA.onchange = qualityCompareB.onchange = () => {
+    state.qualityResult = null;
+    qualityResults.innerHTML = '';
+    qualityStatus.textContent = qualityCompareA.value === qualityCompareB.value ? '请选择两种不同画质。' : '画质已更换，请重新开始对比。';
+    setQualityBusy();
+};
 
 // --- History Logic ---
 
