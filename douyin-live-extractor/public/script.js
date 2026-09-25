@@ -283,12 +283,14 @@ function playStream(url, type, key = null, reconnecting = false, cdnSelected = f
     }
     const stream = { url, type, key, failed: false, wantsPlay: autoplay, playRequested: false, cdnSelected };
     state.currentStream = stream;
-    if (cdnSelected && autoplay) videoElement.oncanplay = () => {
+    const isFlv = type === 'flv' || url.endsWith('.flv');
+    // Live FLV connections start with the CDN's cached GOP; skip it once the first picture is playable.
+    if (isFlv && autoplay) videoElement.oncanplay = () => {
         if (state.currentStream !== stream || !stream.wantsPlay) return;
         if (CdnTester.chase(videoElement)) {
             stream.startupChaseUntil = Date.now() + 3000;
             videoElement.oncanplay = null;
-            syncStatus.textContent = '所选线路已加载，并已追到当前可用直播位置。';
+            if (cdnSelected) syncStatus.textContent = '所选线路已加载，并已追到当前可用直播位置。';
         }
     };
     cdnCurrent.textContent = cdnSelected ? `在播线路：${new URL(url).host}（测速选择）` : '在播线路：平台默认';
@@ -315,7 +317,7 @@ function playStream(url, type, key = null, reconnecting = false, cdnSelected = f
     };
 
     // Handle FLV
-    if (type === 'flv' || url.endsWith('.flv')) {
+    if (isFlv) {
         if (flvjs.isSupported()) {
             const player = flvjs.createPlayer({
                 type: 'flv',
@@ -448,7 +450,7 @@ async function reconnectStream(automatic = false) {
     const stream = state.currentStream;
     if (!stream || state.reconnectController) return;
     if (automatic) {
-        if (!autoLatencyToggle.checked || syncModeSelect.value !== 'fresh' || !stream.wantsPlay) return;
+        if (!autoLatencyToggle.checked || !stream.wantsPlay) return;
         if (state.reconnectAttempts >= 3) {
             syncStatus.textContent = '连续重连未恢复，已停止自动重试。请检查直播状态后点击“重新加载”。';
             stopLatencyMonitor();
@@ -536,14 +538,16 @@ function startLatencyMonitor() {
         // HLS segments arrive in batches: allow at least three segment durations before calling playback stalled.
         const segmentDuration = state.player?.levels?.[state.player.currentLevel]?.details?.targetduration || 0;
         const stallTimeout = Math.max(15000, segmentDuration * 3000);
-        if (syncModeSelect.value === 'fresh' &&
-            (stream.failed || now - lastProgressAt >= stallTimeout || (lagSince !== null && now - lagSince >= 3000))) {
+        const fresh = syncModeSelect.value === 'fresh';
+        // Both modes recover broken connections; only fresh mode also reconnects when jumping cannot clear the lag.
+        if (stream.failed || now - lastProgressAt >= stallTimeout || (fresh && lagSince !== null && now - lagSince >= 3000)) {
             reconnectStream(true);
             return;
         }
         if (target === null || stream.failed) return;
 
-        if (lag > 1.5 && syncModeSelect.value === 'smooth') {
+        // Buffered frames are the newest this connection has delivered, so fresh mode jumps to them sooner.
+        if (lag > (fresh ? 1 : 1.5)) {
             seekToLive();
         } else if (lag > 0.25) {
             videoElement.playbackRate = 1.1;
@@ -587,8 +591,8 @@ syncModeSelect.onchange = () => {
 function updateSyncMode() {
     const fresh = syncModeSelect.value === 'fresh';
     syncModeHint.textContent = fresh
-        ? '最新画面优先：明显落后或播放停滞时重新连接，可能短暂等待；点击“同步直播”可立即重连。'
-        : '平滑追赶：通过加速和跳转追赶直播，不主动重新连接。';
+        ? '最新画面优先：落后超过 1 秒直接跳到已缓冲的最新画面；仍明显落后、连接出错或停滞时重新连接，可能短暂等待；点击“同步直播”可立即重连。'
+        : '平滑追赶：以加速为主追赶直播，落后较多时跳转；仅在连接出错或停滞时重新连接。';
     forwardBtn.title = fresh ? '重新连接，获取新的直播画面' : '跳转到当前可用的直播位置';
     syncStatus.textContent = '';
 }
@@ -853,13 +857,7 @@ qualityTestBtn.onclick = startQualityTest;
 qualityCancelBtn.onclick = () => state.qualityRun?.controller.abort();
 qualityUseBestBtn.onclick = () => {
     const best = state.qualityResult?.best;
-    if (best && !state.qualityRun && !state.cdnRun) {
-        playStream(best.url, 'flv', best.key);
-        const stream = state.currentStream;
-        videoElement.oncanplay = () => {
-            if (state.currentStream === stream && stream?.wantsPlay && CdnTester.chase(videoElement)) videoElement.oncanplay = null;
-        };
-    }
+    if (best && !state.qualityRun && !state.cdnRun) playStream(best.url, 'flv', best.key);
 };
 qualityCompareA.onchange = qualityCompareB.onchange = () => {
     state.qualityResult = null;

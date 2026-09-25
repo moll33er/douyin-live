@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const root = new URL('../', import.meta.url);
 const source = readFileSync(new URL('public/script.js', root), 'utf8');
+const cdnSource = readFileSync(new URL('public/cdn-tester.js', root), 'utf8');
 const html = readFileSync(new URL('public/index.html', root), 'utf8');
 const ranges = (start, end) => ({ length: end > start ? 1 : 0, start: () => start, end: () => end });
 
@@ -62,6 +63,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
         Date: { now: () => now }, AbortController, URL, console, alert() {},
         setInterval: fn => { timers.set(++timerId, fn); return timerId; }, clearInterval: id => timers.delete(id)
     });
+    if (!cdnTester) vm.runInContext(cdnSource, context);
     vm.runInContext(source, context);
     const run = code => vm.runInContext(code, context);
     const start = (type = 'flv') => {
@@ -142,17 +144,60 @@ test('smooth mode accelerates, restores speed, and seeks without reconnecting', 
     assert.equal(h.players.length, 1);
 });
 
-test('fresh mode tolerates a brief lag but reconnects when lag persists', async () => {
+test('every autoplay FLV connection skips the cached startup GOP once playable', async () => {
+    const h = setup();
+    h.start();
+    h.video.buffered = ranges(0, 4);
+    h.video.emit('canplay');
+    assert.ok(Math.abs(h.video.currentTime - 3.65) < 1e-9);
+    assert.equal(h.video.oncanplay, null);
+    h.run("playStream('https://cdn/live.flv', 'flv', 'hd', false, false, false)");
+    assert.equal(h.video.oncanplay, null, 'a paused restore must not jump on its own');
+});
+
+test('fresh mode jumps to the newest buffered picture instead of reconnecting for local backlog', async () => {
     const h = setup();
     h.start();
     h.video.buffered = ranges(0, 100);
-    h.video.currentTime = 90;
-    await h.tick(3, 1);
+    h.video.currentTime = 98.8;
+    await h.tick();
+    assert.equal(h.video.playbackRate, 1.1);
+    h.video.currentTime = 98;
+    await h.tick();
+    assert.equal(h.video.currentTime, 99.5);
+    for (let i = 0; i < 5; i++) {
+        h.video.currentTime = 90;
+        await h.tick();
+        assert.equal(h.video.currentTime, 99.5);
+        await h.tick();
+    }
+    assert.equal(h.video.playbackRate, 1);
     assert.equal(h.players.length, 1);
-    await h.tick(1, 1);
+});
+
+test('fresh mode reconnects when jumping cannot clear a persistent lag', async () => {
+    const h = setup();
+    h.start();
+    h.video.buffered = ranges(0, 100);
+    Object.defineProperty(h.video, 'currentTime', { get: () => 90, set() {}, configurable: true });
+    await h.tick(3);
+    assert.equal(h.players.length, 1);
+    await h.tick();
     assert.equal(h.players.length, 2);
     assert.ok(h.players[0].destroyed);
     assert.equal(h.timers.size, 1);
+});
+
+test('smooth mode also recovers failed and stalled connections', async () => {
+    const h = setup({ mode: 'smooth' });
+    h.start();
+    h.players[0].events.get('error')();
+    await h.tick();
+    assert.equal(h.players.length, 2);
+    await h.tick(14);
+    assert.equal(h.players.length, 2);
+    await h.tick();
+    assert.equal(h.players.length, 3);
 });
 
 test('manual sync follows the selected mode even when automatic sync is off', async () => {
