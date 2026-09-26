@@ -9,7 +9,7 @@ const cdnSource = readFileSync(new URL('public/cdn-tester.js', root), 'utf8');
 const html = readFileSync(new URL('public/index.html', root), 'utf8');
 const ranges = (start, end) => ({ length: end > start ? 1 : 0, start: () => start, end: () => end });
 
-function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qualityTester, localParser } = {}) {
+function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qualityTester, localParser, danmaku } = {}) {
     let now = 100000;
     let timerId = 0;
     const timers = new Map();
@@ -54,7 +54,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
     Player.Events = { MANIFEST_PARSED: 'manifest', ERROR: 'error' };
     const context = vm.createContext({
         document: { getElementById: id => elements.get(id), createElement: element, addEventListener() {}, querySelectorAll: () => [] },
-        window: { addEventListener() {}, DouyinLocalParser: localParser }, CdnTester: cdnTester, QualityTester: qualityTester,
+        window: { addEventListener() {}, DouyinLocalParser: localParser, DouyinDanmaku: danmaku }, CdnTester: cdnTester, QualityTester: qualityTester,
         localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
         axios: { get: async (url, options) => {
             if (url === '/api/config') return { data: { requireLogin: false } };
@@ -95,7 +95,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
 }
 
 test('both deployable frontends stay identical', () => {
-    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js', 'quality-tester.js', 'browser-parser.js', 'douyin-live-bridge.user.js']) {
+    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js', 'quality-tester.js', 'browser-parser.js', 'douyin-live-bridge.user.js', 'danmaku.js', 'danmaku-worker.js', 'douyin-sign.js']) {
         assert.equal(readFileSync(new URL(`public/${file}`, root), 'utf8'), readFileSync(new URL(`Cloudflare/public/${file}`, root), 'utf8'));
     }
 });
@@ -696,4 +696,43 @@ test('cancelling quality comparison preserves paused playback and uncertain resu
     await h.run('startQualityTest()');
     assert.equal(h.elements.get('quality-use-best-btn').disabled, true);
     assert.match(h.elements.get('quality-compare-status').textContent, /无法判定.*重复画面/);
+});
+
+test('live comments connect once a live room plays, survive stream switches and stop with the room or toggle', async () => {
+    const calls = [], added = [];
+    let cleared = 0;
+    const danmaku = {
+        connect(roomId, options) { calls.push({ roomId, ...options }); },
+        DanmakuOverlay: class { add(text) { added.push(text); } clear() { cleared++; } }
+    };
+    let data = { web_rid: '555', room_id: '7689', status: 2, title: '直播', flv: { hd: { url: 'https://cdn/live.flv' } } };
+    const h = setup({ danmaku, liveResponse: () => ({ data: { success: true, data } }) });
+    h.elements.get('url-input').value = '555';
+    await h.run('handleExtract()');
+    assert.equal(calls.length, 0, 'nothing plays yet');
+    h.start();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].roomId, '7689');
+    h.run("playStream('https://cdn/other.flv', 'flv', 'sd')");
+    assert.equal(calls.length, 1, 'switching quality keeps the connection');
+    calls[0].onStatus('弹幕已连接。');
+    calls[0].onComment({ content: '你好' });
+    assert.equal(h.elements.get('danmaku-status').textContent, '弹幕已连接。');
+    assert.deepEqual(added, ['你好']);
+
+    const toggle = h.elements.get('danmaku-toggle');
+    assert.equal(toggle.checked, true, 'on by default');
+    toggle.checked = false; toggle.emit('change');
+    assert.equal(calls[0].signal.aborted, true);
+    assert.equal(h.storage.get('douyin_danmaku'), 'off');
+    assert.equal(h.elements.get('danmaku-status').textContent, '');
+    assert.ok(cleared >= 1);
+    toggle.checked = true; toggle.emit('change');
+    assert.equal(calls.length, 2);
+
+    data = { ...data, room_id: '8888', status: 4 };
+    await h.run('handleExtract()');
+    assert.equal(calls[1].signal.aborted, true, 'a new parse ends the old room');
+    h.start();
+    assert.equal(calls.length, 2, 'offline rooms have no live comments');
 });

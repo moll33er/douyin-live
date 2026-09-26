@@ -486,10 +486,13 @@ header {
     justify-content: center;
 }
 
-#player-container.web-fullscreen video {
+#player-container.web-fullscreen .video-stage {
     flex: 1;
     min-height: 0;
     /* Important for flex shrinking */
+}
+
+#player-container.web-fullscreen video {
     width: 100%;
     height: 100%;
     object-fit: contain;
@@ -502,6 +505,10 @@ video {
     background-color: black;
 }
 
+.video-stage {
+    position: relative;
+}
+
 /* Replacement connection loads here, stacked invisibly over the on-screen player until it takes over. */
 #player-container video.standby {
     position: absolute;
@@ -509,6 +516,26 @@ video {
     left: 0;
     opacity: 0;
     pointer-events: none;
+}
+
+/* Live comments scroll over the picture without taking clicks from the video controls. */
+.danmaku-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.danmaku-item {
+    position: absolute;
+    left: 0;
+    white-space: nowrap;
+    line-height: 1.5;
+    font-weight: 600;
+    color: #fff;
+    opacity: 0.92;
+    text-shadow: 0 0 2px #000, 0 1px 3px rgba(0, 0, 0, 0.9);
+    will-change: transform;
 }
 
 /* Remove default aspect ratio wrapper in fullscreen if any */
@@ -589,7 +616,8 @@ video {
 }
 
 #sync-mode-hint:empty,
-#sync-status:empty {
+#sync-status:empty,
+#danmaku-status:empty {
     display: none;
 }
 

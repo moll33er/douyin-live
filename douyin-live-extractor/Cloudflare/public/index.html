@@ -69,8 +69,11 @@
                 </div>
 
                 <div id="player-container" class="card hidden">
-                    <video id="video-player" controls></video>
-                    <video id="video-standby" class="standby" controls muted playsinline></video>
+                    <div class="video-stage">
+                        <video id="video-player" controls></video>
+                        <video id="video-standby" class="standby" controls muted playsinline></video>
+                        <div id="danmaku-layer" class="danmaku-layer" aria-hidden="true"></div>
+                    </div>
                     <div class="controls-bar">
                         <div class="playback-controls">
                             <button id="reload-btn" class="btn sm">重新加载</button>
@@ -94,6 +97,9 @@
                             <label class="checkbox-label">
                                 <input type="checkbox" id="auto-latency-toggle" checked> 自动同步
                             </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="danmaku-toggle" checked> 弹幕
+                            </label>
                             <div class="control-field">
                                 <label for="speed-select">倍速：</label>
                                 <select id="speed-select">
@@ -109,6 +115,7 @@
                     <div class="sync-info">
                         <p id="sync-mode-hint"></p>
                         <p id="sync-status" role="status" aria-live="polite"></p>
+                        <p id="danmaku-status" role="status" aria-live="polite"></p>
                     </div>
                 </div>
                 <section id="quality-compare-section" class="card hidden" aria-labelledby="quality-compare-heading">
@@ -169,6 +176,7 @@
     <script src="cdn-tester.js"></script>
     <script src="quality-tester.js"></script>
     <script type="module" src="browser-parser.js"></script>
+    <script type="module" src="danmaku.js"></script>
     <script src="script.js"></script>
 </body>
 

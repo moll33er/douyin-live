@@ -15,7 +15,9 @@ const state = {
     cdnRun: null,
     cdnResult: null,
     qualityRun: null,
-    qualityResult: null
+    qualityResult: null,
+    danmakuRoom: null,
+    danmaku: null
 };
 
 // Elements
@@ -67,9 +69,13 @@ const qualityUseBestBtn = document.getElementById('quality-use-best-btn');
 const qualityStatus = document.getElementById('quality-compare-status');
 const qualityResults = document.getElementById('quality-compare-results');
 const qualityPreviews = document.getElementById('quality-previews');
+const danmakuToggle = document.getElementById('danmaku-toggle');
+const danmakuStatus = document.getElementById('danmaku-status');
+const danmakuLayer = document.getElementById('danmaku-layer');
 
 try {
     syncModeSelect.value = localStorage.getItem('douyin_sync_mode') === 'smooth' ? 'smooth' : 'fresh';
+    danmakuToggle.checked = localStorage.getItem('douyin_danmaku') !== 'off';
 } catch (err) { /* Keep the default when storage is unavailable. */ }
 
 // --- Auth Logic ---
@@ -128,6 +134,8 @@ function handleLogout() {
     if (!REQUIRE_LOGIN) return;
 
     destroyPlayer();
+    stopDanmaku();
+    state.danmakuRoom = null;
     state.token = null;
     localStorage.removeItem('douyin_token');
     checkAuth();
@@ -167,6 +175,8 @@ async function handleExtract() {
     cdnSection.classList.add('hidden');
     qualityCompareSection.classList.add('hidden');
     destroyPlayer();
+    stopDanmaku();
+    state.danmakuRoom = null;
 
     // Direct Stream Support
     // Check path extension instead of full URL
@@ -201,6 +211,8 @@ async function handleExtract() {
         const data = result.data;
         // Share texts and short links are replaced by the room number, which reloads and history reuse.
         const room = data.web_rid || roomNumber(url) || url;
+        // Live comments connect once something plays (activateStream).
+        state.danmakuRoom = Number(data.status) === 2 ? data.room_id || null : null;
         renderInfo(data, result);
         renderQualities(data);
         state.currentUrl = room; // Save for reload
@@ -414,6 +426,7 @@ function activateStream({ url, type, key, cdnSelected }) {
     if (autoLatencyToggle.checked) {
         startLatencyMonitor();
     }
+    startDanmaku();
 }
 
 function playStream(url, type, key = null, reconnecting = false, cdnSelected = false, autoplay = true) {
@@ -757,6 +770,39 @@ function updateSpeedControls() {
 updateSpeedControls();
 updateSyncMode();
 
+// --- Danmaku ---
+
+let danmakuOverlay = null;
+
+// Connects the parsed room's live comments; switching quality or line keeps the room's connection.
+function startDanmaku() {
+    const roomId = state.danmakuRoom;
+    const api = window.DouyinDanmaku;
+    if (!api || !roomId || !danmakuToggle.checked || state.danmaku?.roomId === roomId) return;
+    stopDanmaku();
+    const controller = new AbortController();
+    state.danmaku = { roomId, controller };
+    danmakuOverlay ??= new api.DanmakuOverlay(danmakuLayer);
+    api.connect(roomId, {
+        signal: controller.signal,
+        onComment: comment => danmakuOverlay.add(comment.content),
+        onStatus: message => { danmakuStatus.textContent = message; }
+    });
+}
+
+function stopDanmaku() {
+    state.danmaku?.controller.abort();
+    state.danmaku = null;
+    danmakuOverlay?.clear();
+    danmakuStatus.textContent = '';
+}
+
+danmakuToggle.onchange = () => {
+    try { localStorage.setItem('douyin_danmaku', danmakuToggle.checked ? 'on' : 'off'); } catch (err) { }
+    if (!danmakuToggle.checked) stopDanmaku();
+    else if (state.currentStream) startDanmaku();
+};
+
 // --- CDN freshness comparison ---
 
 function setCdnBusy(busy) {
@@ -902,6 +948,7 @@ cdnQualitySelect.onchange = () => {
 window.addEventListener('pagehide', () => {
     cancelCdnTest();
     destroyPlayer();
+    stopDanmaku();
 });
 document.addEventListener('visibilitychange', () => {
     if (document.hidden && state.cdnRun) {
