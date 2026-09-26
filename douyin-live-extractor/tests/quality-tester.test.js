@@ -17,7 +17,7 @@ function setup() {
                 requestVideoFrameCallback(fn) { callbacks.set(++next, fn); return next; },
                 cancelVideoFrameCallback(id) { callbacks.delete(id); },
                 play: () => Promise.resolve(), pause() { this.paused = true; }, removeAttribute() {}, load() {},
-                frame(mediaTime = now / 1000) {
+                frame(mediaTime = now / 1000 + (this.offset || 0)) {
                     this.currentTime = mediaTime;
                     const pending = [...callbacks]; callbacks.clear();
                     for (const [, fn] of pending) fn(now, { mediaTime, expectedDisplayTime: now });
@@ -32,14 +32,18 @@ function setup() {
         addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
     const context = vm.createContext({ document, DOMException, performance: { now: () => now },
         setInterval: fn => { timers.set(++next, fn); return next; }, clearInterval: id => timers.delete(id),
-        CdnTester: { streamUrl: url => url, chase: video => { video.chased = true; return true; } },
+        CdnTester: { streamUrl: url => url, chase: video => {
+            video.chased = (video.chased || 0) + 1;
+            video.offset = video.buffered.end(0) - 0.35 - now / 1000;
+            return true;
+        } },
         flvjs: { isSupported: () => true, Events: { ERROR: 'error' }, createPlayer() {
             const player = { on(name, fn) { this.error = fn; }, attachMediaElement() {}, load() {}, destroy() { this.destroyed = true; } };
             players.push(player); return player;
         } }
     });
     vm.runInContext(source, context);
-    return { api: context.QualityTester, videos, players, timers, document, listeners,
+    return { api: context.QualityTester, videos, players, timers, document, listeners, clock: () => now,
         tick(ms = 100, frames = true) { now += ms; if (frames) videos.forEach(video => video.frame()); for (const fn of [...timers.values()]) fn(); } };
 }
 
@@ -98,6 +102,28 @@ test('measurement chases both players then samples, and releases callbacks, play
     assert.equal(h.document.body.children.length, 0);
     assert.equal(h.timers.size, 0);
     assert.equal(h.listeners.size, 0);
+});
+
+test('chasing outlasts the cached pictures a CDN bursts at startup', async () => {
+    const h = setup();
+    const task = h.api.measure(sources, new AbortController().signal);
+    // Measured on a real 原画 connection: its cache kept arriving at ~4.5x real time after the first frame.
+    const hd = h.videos[1];
+    hd.buffered = { length: 1, start: () => 0, end: () => Math.min(h.clock(), 3000) * 0.0045 + Math.max(0, h.clock() - 3000) / 1000 };
+    for (let i = 0; i < 300; i++) h.tick();
+    const result = await task;
+    assert.ok(result.eligible, result.error);
+    assert.ok(hd.chased >= 3, `chased ${hd.chased} times`);
+});
+
+test('a backlog that never settles is still reported as unable to reach the live position', async () => {
+    const h = setup();
+    const task = h.api.measure(sources, new AbortController().signal);
+    h.videos[1].buffered = { length: 1, start: () => 0, end: () => h.clock() / 500 };
+    for (let i = 0; i < 260; i++) h.tick();
+    await assert.rejects(task, /hd：缓冲持续积压，无法稳定追到直播位置/);
+    assert.ok(h.players.every(p => p.destroyed));
+    assert.equal(h.timers.size, 0);
 });
 
 test('cancel, background, network failure, stalled playback and warmup timeout release every resource', async () => {

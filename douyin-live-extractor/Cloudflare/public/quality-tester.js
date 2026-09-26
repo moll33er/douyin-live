@@ -71,7 +71,7 @@ globalThis.QualityTester = (() => {
         if (!globalThis.flvjs?.isSupported()) throw new Error('当前浏览器不支持 FLV 试播。');
         if (sources.length !== 2 || sources[0].key === sources[1].key) throw new Error('请选择两种不同画质。');
         const states = sources.map(source => ({ ...source, url: CdnTester.streamUrl(source.url), samples: [], chases: 0,
-            lastFrameAt: null, lastMediaTime: null, stableSince: null, ready: false }));
+            chasedAt: -Infinity, lastFrameAt: null, lastMediaTime: null, stableSince: null, ready: false }));
         if (states[0].url === states[1].url) throw new Error('这两种画质返回了同一播放地址，无法单独比较。');
         let timer, stopped = false, sampleStart = null;
         const began = performance.now();
@@ -124,9 +124,10 @@ globalThis.QualityTester = (() => {
                         if (video.seeking || video.readyState < 2) { s.stableSince = null; }
                         else {
                             const gap = video.buffered.length ? video.buffered.end(video.buffered.length - 1) - video.currentTime : Infinity;
-                            if (!s.chases || (sampleStart === null && gap > 1)) {
-                                if (s.chases >= 3) throw new Error(`${s.label || s.key}：无法稳定追到直播位置。`);
-                                if (CdnTester.chase(video)) s.chases++;
+                            // A new connection keeps receiving the CDN's cached pictures faster than real time for a
+                            // few seconds; chase at most once a second until that settles. The warmup timeout bounds it.
+                            if (!s.chases || (sampleStart === null && gap > 1 && displayAt - s.chasedAt >= 1000)) {
+                                if (CdnTester.chase(video)) { s.chases++; s.chasedAt = displayAt; }
                                 s.stableSince = null; s.ready = false;
                             } else {
                                 const elapsed = s.lastFrameAt === null ? 0 : displayAt - s.lastFrameAt;
@@ -163,7 +164,11 @@ globalThis.QualityTester = (() => {
             if (!stopped) timer = setInterval(() => {
                 const now = performance.now();
                 if (sampleStart === null) {
-                    if (now - began > 25000) { finish(new Error('加载或追帧超时，请检查网络后重试。')); return; }
+                    if (now - began > 25000) {
+                        const behind = states.find(s => !s.ready && now - s.chasedAt < 3000);
+                        finish(new Error(behind ? `${behind.label || behind.key}：缓冲持续积压，无法稳定追到直播位置。` : '加载或追帧超时，请检查网络后重试。'));
+                        return;
+                    }
                     if (states.every(s => s.ready && now - s.lastFrameAt < 500)) {
                         const ratios = states.map(s => s.video.videoWidth / s.video.videoHeight);
                         if (!ratios.every(Number.isFinite) || Math.abs(ratios[0] / ratios[1] - 1) > 0.03) {
