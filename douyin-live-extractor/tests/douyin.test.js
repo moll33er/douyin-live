@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseRoomInput, getRoomStreams, InputError } from '../lib/douyin.js';
+import { parseRoomInput, getRoomStreams, InputError } from '../public/douyin.js';
 
 const root = new URL('../', import.meta.url);
 const SHARE = '1- #在抖音，记录美好生活#【测试主播】正在直播，来和我一起支持Ta吧。复制下方链接，打开【抖音】，直接观看直播！ https://v.douyin.com/AbCdEfGh123/ 0@9.com :5pm';
@@ -45,7 +45,7 @@ function mockFetch({ page = roomPage(pageRoom), reflow = reflowRoom, short = 'ht
 }
 
 test('both deployable backends share an identical Douyin module', () => {
-    assert.equal(readFileSync(new URL('lib/douyin.js', root), 'utf8'), readFileSync(new URL('Cloudflare/lib/douyin.js', root), 'utf8'));
+    assert.equal(readFileSync(new URL('public/douyin.js', root), 'utf8'), readFileSync(new URL('Cloudflare/public/douyin.js', root), 'utf8'));
 });
 
 test('room input is read from numbers, room links and whole share texts', () => {

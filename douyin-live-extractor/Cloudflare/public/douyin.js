@@ -1,5 +1,6 @@
-/* Douyin room resolution shared by the Node server and Cloudflare Pages Functions.
-   lib/douyin.js and Cloudflare/lib/douyin.js must stay identical. */
+/* Douyin room resolution shared by the Node server, Cloudflare Pages Functions and the page itself
+   (browser-parser.js). It lives in public/ so browsers can load it; public/douyin.js and
+   Cloudflare/public/douyin.js must stay identical. */
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
 const QUALITY_LABELS = {

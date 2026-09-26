@@ -1,5 +1,5 @@
 import { jwtVerify } from 'jose';
-import { getRoomStreams, InputError } from '../../lib/douyin.js';
+import { getRoomStreams, InputError } from '../../public/douyin.js';
 
 const REQUIRE_LOGIN_VALUES = new Set(['true', '1', 'yes', 'on']);
 

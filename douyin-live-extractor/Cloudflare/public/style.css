@@ -422,6 +422,16 @@ header {
     50% { opacity: 0.3; }
 }
 
+.parse-source {
+    margin-top: 10px;
+    color: var(--text-sec);
+    font-size: 13px;
+}
+
+.parse-source a {
+    color: var(--primary);
+}
+
 /* Quality Grid */
 .button-grid {
     display: flex;

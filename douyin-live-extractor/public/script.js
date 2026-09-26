@@ -30,6 +30,8 @@ const logoutBtn = document.getElementById('logout-btn');
 const urlInput = document.getElementById('url-input');
 const extractBtn = document.getElementById('extract-btn');
 const infoSection = document.getElementById('info-section');
+const parseSource = document.getElementById('parse-source');
+const bridgeInstallLink = document.getElementById('bridge-install-link');
 const qualitySection = document.getElementById('quality-section');
 const qualityButtons = document.getElementById('quality-buttons');
 const playerContainer = document.getElementById('player-container');
@@ -133,6 +135,26 @@ function handleLogout() {
 
 // --- Extraction Logic ---
 
+// With the optional userscript the browser parses rooms itself, so Douyin dispatches lines for the viewer's
+// own network (browser-parser.js); without it, or when that fails, the server parses them.
+async function fetchRoom(input, options = {}) {
+    let localError = null;
+    if (window.DouyinLocalParser?.available()) {
+        try {
+            const data = await window.DouyinLocalParser.resolve(input, options);
+            if (data) return { data, source: 'browser' };
+            localError = '没有取得直播间数据';
+        } catch (err) {
+            if (options.signal?.aborted) throw err;
+            localError = err.message;
+        }
+    }
+    const headers = REQUIRE_LOGIN && state.token ? { 'x-api-key': state.token } : {};
+    const res = await axios.get('/api/live', { params: { url: input }, headers, ...options });
+    if (!res.data.success) throw new Error(res.data.error || '直播地址获取失败');
+    return { data: res.data.data, source: 'server', localError };
+}
+
 async function handleExtract() {
     const url = urlInput.value.trim();
     if (!url) return;
@@ -175,22 +197,15 @@ async function handleExtract() {
     }
 
     try {
-        const headers = REQUIRE_LOGIN && state.token ? { 'x-api-key': state.token } : {};
-        const res = await axios.get('/api/live', {
-            params: { url: url },
-            headers
-        });
-
-        if (res.data.success) {
-            const data = res.data.data;
-            // Share texts and short links are replaced by the room number, which reloads and history reuse.
-            const room = data.web_rid || roomNumber(url) || url;
-            renderInfo(data);
-            renderQualities(data);
-            state.currentUrl = room; // Save for reload
-            urlInput.value = room;
-            addToHistory(data, room);
-        }
+        const result = await fetchRoom(url);
+        const data = result.data;
+        // Share texts and short links are replaced by the room number, which reloads and history reuse.
+        const room = data.web_rid || roomNumber(url) || url;
+        renderInfo(data, result);
+        renderQualities(data);
+        state.currentUrl = room; // Save for reload
+        urlInput.value = room;
+        addToHistory(data, room);
     } catch (err) {
         if (REQUIRE_LOGIN && err.response && (err.response.status === 401 || err.response.status === 403)) {
             // Token expired or invalid
@@ -205,10 +220,14 @@ async function handleExtract() {
     }
 }
 
-function renderInfo(data) {
+function renderInfo(data, { source, localError } = {}) {
     document.getElementById('room-title').textContent = data.title;
     document.getElementById('anchor-name').textContent = data.anchor_name;
     document.getElementById('cover-img').src = data.cover || '';
+    parseSource.textContent = source === 'browser' ? '浏览器本地解析，线路按你当前的网络分配。'
+        : source !== 'server' ? ''
+        : localError ? `浏览器解析失败（${localError}），已改用服务器解析。` : '服务器解析，线路按服务器所在的网络分配。';
+    bridgeInstallLink.classList.toggle('hidden', source !== 'server' || !!localError);
     infoSection.classList.remove('hidden');
 }
 
@@ -565,19 +584,15 @@ async function reconnectStream(automatic = false, renew = false) {
         // Signed stream URLs stay valid until `expire`, so a room page is only fetched again when the
         // address may be broken or stale; direct URLs are re-opened as supplied.
         if (room && (renew || stream.failed || stream.renewUrl || urlExpiring(url))) {
-            const headers = REQUIRE_LOGIN && state.token ? { 'x-api-key': state.token } : {};
-            const res = await axios.get('/api/live', {
-                params: { url: state.currentUrl }, headers, signal: controller.signal, timeout: 10000
-            });
+            const result = await fetchRoom(state.currentUrl, { signal: controller.signal, timeout: 10000 });
             if (controller.signal.aborted || state.currentStream !== stream) return;
-            if (!res.data.success) throw new Error(res.data.error || '直播地址获取失败');
-            const qualities = res.data.data[type === 'flv' ? 'flv' : 'hls'];
+            const qualities = result.data[type === 'flv' ? 'flv' : 'hls'];
             key = qualities?.[key] ? key : Object.keys(qualities || {})[0];
             if (!qualities?.[key]?.url) throw new Error('暂无可用直播画面，直播可能已经结束');
             url = qualities[key].url;
             cdnSelected = false;
-            renderInfo(res.data.data);
-            renderQualities(res.data.data, type);
+            renderInfo(result.data, result);
+            renderQualities(result.data, type);
         }
         if (controller.signal.aborted || state.currentStream !== stream) return;
         // Broken or stalled connections have no picture worth keeping, so they are replaced directly.

@@ -9,7 +9,7 @@ const cdnSource = readFileSync(new URL('public/cdn-tester.js', root), 'utf8');
 const html = readFileSync(new URL('public/index.html', root), 'utf8');
 const ranges = (start, end) => ({ length: end > start ? 1 : 0, start: () => start, end: () => end });
 
-function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qualityTester } = {}) {
+function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qualityTester, localParser } = {}) {
     let now = 100000;
     let timerId = 0;
     const timers = new Map();
@@ -54,7 +54,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
     Player.Events = { MANIFEST_PARSED: 'manifest', ERROR: 'error' };
     const context = vm.createContext({
         document: { getElementById: id => elements.get(id), createElement: element, addEventListener() {}, querySelectorAll: () => [] },
-        window: { addEventListener() {} }, CdnTester: cdnTester, QualityTester: qualityTester,
+        window: { addEventListener() {}, DouyinLocalParser: localParser }, CdnTester: cdnTester, QualityTester: qualityTester,
         localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
         axios: { get: async (url, options) => {
             if (url === '/api/config') return { data: { requireLogin: false } };
@@ -95,7 +95,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
 }
 
 test('both deployable frontends stay identical', () => {
-    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js', 'quality-tester.js']) {
+    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js', 'quality-tester.js', 'browser-parser.js', 'douyin-live-bridge.user.js']) {
         assert.equal(readFileSync(new URL(`public/${file}`, root), 'utf8'), readFileSync(new URL(`Cloudflare/public/${file}`, root), 'utf8'));
     }
 });
@@ -139,6 +139,45 @@ test('share text resolves to the room number for the input, reloads and history'
     assert.equal(h.elements.get('url-input').value, '12345678901');
     assert.equal(h.run('state.currentUrl'), '12345678901');
     assert.equal(JSON.parse(h.storage.get('douyin_history'))[0].url, '12345678901');
+});
+
+test('with the userscript installed rooms are parsed in the browser instead of the server', async () => {
+    const calls = [];
+    const data = { web_rid: '555', status: 2, title: '直播', anchor_name: '主播', flv: { hd: { url: 'https://cdn/local.flv' } } };
+    const h = setup({ localParser: { available: () => true, resolve: async (input, options) => { calls.push({ input, options }); return data; } } });
+    h.elements.get('url-input').value = 'https://live.douyin.com/555';
+    await h.run('handleExtract()');
+    assert.equal(h.requests.length, 0);
+    assert.equal(calls[0].input, 'https://live.douyin.com/555');
+    assert.equal(h.elements.get('url-input').value, '555');
+    assert.equal(h.run('state.currentUrl'), '555');
+    assert.equal(h.elements.get('parse-source').textContent, '浏览器本地解析，线路按你当前的网络分配。');
+});
+
+test('a failed browser parse falls back to the server and says why', async () => {
+    let outcome;
+    const h = setup({ localParser: { available: () => true, resolve: async () => outcome() } });
+    const extract = async () => { h.elements.get('url-input').value = '123'; await h.run('handleExtract()'); };
+    outcome = () => { throw new TypeError('请求超时'); };
+    await extract();
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.requests[0].params.url, '123');
+    assert.equal(h.elements.get('parse-source').textContent, '浏览器解析失败（请求超时），已改用服务器解析。');
+    outcome = () => null;
+    await extract();
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.elements.get('parse-source').textContent, '浏览器解析失败（没有取得直播间数据），已改用服务器解析。');
+});
+
+test('without the userscript rooms are parsed by the server as before', async () => {
+    const h = setup({ localParser: { available: () => false, resolve: async () => assert.fail('the userscript is not installed') } });
+    h.elements.get('url-input').value = '123';
+    await h.run('handleExtract()');
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.elements.get('parse-source').textContent, '服务器解析，线路按服务器所在的网络分配。');
+    h.elements.get('url-input').value = 'https://cdn/live.flv';
+    await h.run('handleExtract()');
+    assert.equal(h.elements.get('parse-source').textContent, '', 'direct links are not parsed at all');
 });
 
 test('line candidates from the server and earlier parses of the same room reach discovery', async () => {
@@ -384,6 +423,32 @@ test('room reload refreshes its URL and retains the selected quality', async () 
     assert.equal(h.run('state.currentStream.url'), 'https://cdn/new.flv');
     assert.equal(h.run('state.currentStream.key'), 'hd');
     assert.equal(JSON.parse(h.elements.get('quality-select').value).url, 'https://cdn/new.flv');
+});
+
+test('room reloads also parse in the browser, and a cancelled one is not retried on the server', async () => {
+    const calls = [];
+    let stall = false;
+    const h = setup({ localParser: { available: () => true, resolve: (input, options) => {
+        calls.push(options);
+        if (!stall) return Promise.resolve({ flv: { hd: { url: 'https://cdn/local.flv', label: '高清' } } });
+        return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)));
+    } } });
+    h.start();
+    h.run("state.currentUrl = 'https://live.douyin.com/123'");
+    const reload = h.run('reconnectStream(false, true)');
+    await h.ready();
+    await reload;
+    assert.equal(calls[0].timeout, 10000);
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.run('state.currentStream.url'), 'https://cdn/local.flv');
+
+    stall = true;
+    const reconnect = h.run('reconnectStream(false, true)');
+    h.run("playStream('https://cdn/other.flv', 'flv', 'other')");
+    await reconnect;
+    assert.equal(calls[1].signal.aborted, true);
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.run('state.currentStream.url'), 'https://cdn/other.flv');
 });
 
 test('an HLS reconnect keeps the quality selector consistent when FLV becomes available', async () => {
