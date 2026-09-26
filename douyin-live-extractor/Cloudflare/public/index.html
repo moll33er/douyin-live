@@ -34,7 +34,7 @@
         <!-- Dashboard Screen -->
         <div id="dashboard-screen" class="screen hidden">
             <header>
-                <div class="logo">抖音直播</div>
+                <div class="logo"><span class="logo-mark" aria-hidden="true">▶</span>抖音直播</div>
                 <button id="logout-btn" class="btn text">退出登录</button>
             </header>
 
@@ -67,6 +67,49 @@
                     </div>
                 </div>
 
+                <div id="player-container" class="card hidden">
+                    <video id="video-player" controls></video>
+                    <video id="video-standby" class="standby" controls muted playsinline></video>
+                    <div class="controls-bar">
+                        <div class="playback-controls">
+                            <button id="reload-btn" class="btn sm">重新加载</button>
+                            <button id="forward-btn" class="btn sm">同步直播</button>
+                            <button id="fullscreen-btn" class="btn sm">全屏</button>
+                        </div>
+                        <div class="speed-controls">
+                            <div class="control-field">
+                                <label for="quality-select">画质：</label>
+                                <select id="quality-select">
+                                    <option value="" disabled selected>自动</option>
+                                </select>
+                            </div>
+                            <div class="control-field">
+                                <label for="sync-mode">同步模式：</label>
+                                <select id="sync-mode" aria-describedby="sync-mode-hint">
+                                    <option value="smooth">平滑追赶</option>
+                                    <option value="fresh" selected>最新画面优先</option>
+                                </select>
+                            </div>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="auto-latency-toggle" checked> 自动同步
+                            </label>
+                            <div class="control-field">
+                                <label for="speed-select">倍速：</label>
+                                <select id="speed-select">
+                                    <option value="0.5">0.5x</option>
+                                    <option value="1.0" selected>1.0x</option>
+                                    <option value="1.25">1.25x</option>
+                                    <option value="1.5">1.5x</option>
+                                    <option value="2.0">2.0x</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sync-info">
+                        <p id="sync-mode-hint"></p>
+                        <p id="sync-status" role="status" aria-live="polite"></p>
+                    </div>
+                </div>
                 <section id="quality-compare-section" class="card hidden" aria-labelledby="quality-compare-heading">
                     <h3 id="quality-compare-heading">画质对比 · 哪个画面更新</h3>
                     <p class="cdn-help">同时试播两种画质，追帧稳定后比较 20 秒连续画面。测试会暂停当前拉流，结束或取消后恢复。请保持页面在前台。</p>
@@ -119,49 +162,6 @@
                     <p id="cdn-current" class="cdn-help">在播线路：平台默认</p>
                 </section>
 
-                <div id="player-container" class="card hidden">
-                    <video id="video-player" controls></video>
-                    <video id="video-standby" class="standby" controls muted playsinline></video>
-                    <div class="controls-bar">
-                        <div class="playback-controls">
-                            <button id="reload-btn" class="btn sm">重新加载</button>
-                            <button id="forward-btn" class="btn sm">同步直播</button>
-                            <button id="fullscreen-btn" class="btn sm">全屏</button>
-                        </div>
-                        <div class="speed-controls">
-                            <div class="control-field">
-                                <label for="quality-select">画质：</label>
-                                <select id="quality-select">
-                                    <option value="" disabled selected>自动</option>
-                                </select>
-                            </div>
-                            <div class="control-field">
-                                <label for="sync-mode">同步模式：</label>
-                                <select id="sync-mode" aria-describedby="sync-mode-hint">
-                                    <option value="smooth">平滑追赶</option>
-                                    <option value="fresh" selected>最新画面优先</option>
-                                </select>
-                            </div>
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="auto-latency-toggle" checked> 自动同步
-                            </label>
-                            <div class="control-field">
-                                <label for="speed-select">倍速：</label>
-                                <select id="speed-select">
-                                    <option value="0.5">0.5x</option>
-                                    <option value="1.0" selected>1.0x</option>
-                                    <option value="1.25">1.25x</option>
-                                    <option value="1.5">1.5x</option>
-                                    <option value="2.0">2.0x</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="sync-info">
-                        <p id="sync-mode-hint"></p>
-                        <p id="sync-status" role="status" aria-live="polite"></p>
-                    </div>
-                </div>
             </main>
         </div>
     </div>
