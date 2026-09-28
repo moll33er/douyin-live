@@ -331,11 +331,18 @@ export class DanmakuOverlay {
         this.timer = null;
     }
 
-    add(content) {
+    setFontSize(size) {
+        if (this.fontSize === size) return;
+        this.fontSize = size;
+        this.clear();
+    }
+
+    add(content, nickname = '') {
         if (this.win.document?.hidden) return;
         const chars = [...String(content).trim()];
         if (!chars.length) return;
-        this.queue.push(chars.length > MAX_CHARS ? chars.slice(0, MAX_CHARS).join('') + '…' : chars.join(''));
+        const body = chars.length > MAX_CHARS ? chars.slice(0, MAX_CHARS).join('') + '…' : chars.join('');
+        this.queue.push(nickname ? `${nickname}：${body}` : body);
         // Busy rooms outpace the screen; stale comments are dropped rather than shown late.
         if (this.queue.length > MAX_QUEUE) this.queue.splice(0, this.queue.length - MAX_QUEUE);
         this.pump();
@@ -347,7 +354,7 @@ export class DanmakuOverlay {
             this.queue = [];
             return;
         }
-        const fontSize = Math.round(Math.min(28, Math.max(14, height / 20)));
+        const fontSize = this.fontSize || Math.round(Math.min(28, Math.max(14, height / 20)));
         const laneHeight = Math.round(fontSize * 1.5);
         // The bottom quarter stays clear for the picture's own captions and the video controls.
         const laneCount = Math.max(1, Math.floor(height * 0.75 / laneHeight));

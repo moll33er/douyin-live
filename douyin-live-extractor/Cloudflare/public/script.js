@@ -773,6 +773,25 @@ updateSyncMode();
 // --- Danmaku ---
 
 let danmakuOverlay = null;
+const danmakuFontSize = document.getElementById('danmaku-font-size');
+const danmakuTransparency = document.getElementById('danmaku-transparency');
+for (const [control, key, allowed, fallback] of [
+    [danmakuFontSize, 'douyin_danmaku_font_size', ['0', '14', '18', '24', '28', '36'], '0'],
+    [danmakuTransparency, 'douyin_danmaku_transparency', ['0', '8', '25', '50', '75'], '8']
+]) {
+    let saved;
+    try { saved = localStorage.getItem(key); } catch (err) { }
+    control.value = allowed.includes(saved) ? saved : fallback;
+    control.onchange = () => {
+        try { localStorage.setItem(key, control.value); } catch (err) { }
+        applyDanmakuAppearance();
+    };
+}
+function applyDanmakuAppearance() {
+    danmakuLayer.style.setProperty('--danmaku-opacity', String(1 - Number(danmakuTransparency.value) / 100));
+    danmakuOverlay?.setFontSize(Number(danmakuFontSize.value));
+}
+applyDanmakuAppearance();
 
 // Connects the parsed room's live comments; switching quality or line keeps the room's connection.
 function startDanmaku() {
@@ -783,10 +802,11 @@ function startDanmaku() {
     const controller = new AbortController();
     state.danmaku = { roomId, controller };
     danmakuOverlay ??= new api.DanmakuOverlay(danmakuLayer);
+    applyDanmakuAppearance();
     api.connect(roomId, {
         signal: controller.signal,
         relay: danmakuRelayAddress(),
-        onComment: comment => danmakuOverlay.add(comment.content),
+        onComment: comment => danmakuOverlay.add(comment.content, comment.nickname),
         onStatus: message => { danmakuStatus.textContent = message; }
     });
 }

@@ -353,3 +353,18 @@ test('the overlay trims long comments, drops stale backlog and stays idle while 
     collapsed.overlay.add('没有尺寸');
     assert.equal(collapsed.overlay.queue.length, 0);
 });
+
+test('nicknames stay complete and font changes reset lane layout', () => {
+    const h = overlayHarness();
+    const nickname = '完整🌈昵称'.repeat(12);
+    h.overlay.add('内容', nickname);
+    assert.equal(h.layer.children[0].textContent, nickname + '：内容');
+    h.overlay.setFontSize(36);
+    assert.equal(h.layer.children.length, 0);
+    h.overlay.add('下一条', '观众');
+    assert.equal(h.layer.children[0].style.fontSize, '36px');
+    assert.equal(h.layer.children[0].style.top, '0px');
+    h.overlay.setFontSize(0);
+    h.overlay.add('自动');
+    assert.equal(h.layer.children[0].style.fontSize, '23px');
+});

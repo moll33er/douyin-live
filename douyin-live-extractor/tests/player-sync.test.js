@@ -9,18 +9,19 @@ const cdnSource = readFileSync(new URL('public/cdn-tester.js', root), 'utf8');
 const html = readFileSync(new URL('public/index.html', root), 'utf8');
 const ranges = (start, end) => ({ length: end > start ? 1 : 0, start: () => start, end: () => end });
 
-function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qualityTester, localParser, danmaku } = {}) {
+function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qualityTester, localParser, danmaku, saved = [] } = {}) {
     let now = 100000;
     let timerId = 0;
     const timers = new Map();
     const timeouts = new Map();
     const players = [];
     const requests = [];
-    const storage = new Map([['douyin_sync_mode', mode]]);
+    const storage = new Map([['douyin_sync_mode', mode], ...saved]);
     function element() {
         const listeners = new Map();
         return {
             value: '', checked: false, options: [], textContent: '', disabled: false,
+            style: { setProperty(name, value) { this[name] = value; } },
             classList: { add() {}, remove() {}, toggle() {} },
             set innerHTML(value) { this.options = []; },
             appendChild(child) { this.options.push(child); },
@@ -704,7 +705,7 @@ test('live comments connect once a live room plays, survive stream switches and 
     let cleared = 0;
     const danmaku = {
         connect(roomId, options) { calls.push({ roomId, ...options }); },
-        DanmakuOverlay: class { add(text) { added.push(text); } clear() { cleared++; } }
+        DanmakuOverlay: class { add(text) { added.push(text); } clear() { cleared++; } setFontSize() {} }
     };
     let data = { web_rid: '555', room_id: '7689', status: 2, title: '直播', flv: { hd: { url: 'https://cdn/live.flv' } } };
     const h = setup({ danmaku, liveResponse: () => ({ data: { success: true, data } }) });
@@ -739,4 +740,20 @@ test('live comments connect once a live room plays, survive stream switches and 
     assert.equal(calls[1].signal.aborted, true, 'a new parse ends the old room');
     h.start();
     assert.equal(calls.length, 2, 'offline rooms have no live comments');
+});
+
+test('danmaku appearance applies immediately and restores browser preferences', () => {
+    const h = setup();
+    const size = h.elements.get('danmaku-font-size');
+    const transparency = h.elements.get('danmaku-transparency');
+    size.value = '36'; size.emit('change');
+    transparency.value = '50'; transparency.emit('change');
+    assert.equal(h.elements.get('danmaku-layer').style['--danmaku-opacity'], '0.5');
+    const restored = setup({ saved: [...h.storage] });
+    assert.equal(restored.elements.get('danmaku-font-size').value, '36');
+    assert.equal(restored.elements.get('danmaku-transparency').value, '50');
+    assert.equal(restored.elements.get('danmaku-layer').style['--danmaku-opacity'], '0.5');
+    const invalid = setup({ saved: [['douyin_danmaku_font_size', '-999'], ['douyin_danmaku_transparency', 'bad']] });
+    assert.equal(invalid.elements.get('danmaku-font-size').value, '0');
+    assert.equal(invalid.elements.get('danmaku-transparency').value, '8');
 });
