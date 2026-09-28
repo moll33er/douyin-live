@@ -5,6 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import vm from 'node:vm';
 import { pushAddress, encodeFrame, decodeFields, readFrame, readChat, connect, DanmakuOverlay } from '../public/danmaku.js';
+import { relayTarget, visitorCookie, openUpstream, pipeSockets } from '../public/danmaku-relay.js';
 
 const root = new URL('../', import.meta.url);
 
@@ -58,7 +59,7 @@ test('frames round-trip, including 64-bit ids and heartbeats', async () => {
 });
 
 // --- connect() against a scripted websocket ---
-function harness(modes) {
+function harness(modes, { relay = null, memory = { directRefused: false } } = {}) {
     const sockets = [], signs = [], fetches = [], sleeps = [], intervals = [], statuses = [], comments = [];
     let clock = 1790000000000;
     class FakeSocket {
@@ -82,9 +83,10 @@ function harness(modes) {
         sleep: async ms => { sleeps.push(ms); },
         setInterval: (fn, ms) => intervals.push({ fn, ms }),
         clearInterval: () => {},
-        now: () => clock
+        now: () => clock,
+        memory
     };
-    const done = connect('7689', { signal: controller.signal, onStatus: s => statuses.push(s), onComment: c => comments.push(c.content) }, env);
+    const done = connect('7689', { signal: controller.signal, relay, onStatus: s => statuses.push(s), onComment: c => comments.push(c.content) }, env);
     const waitFor = async (condition, what) => {
         for (let i = 0; i < 200 && !condition(); i++) await new Promise(r => setTimeout(r, 2));
         assert.ok(condition(), `timed out waiting for ${what}`);
@@ -135,6 +137,55 @@ test('refusals that persist after fetching the cookie stop with an explanation',
     assert.match(h.statuses.at(-1), /第三方 Cookie/);
 });
 
+test('when the cookie never reaches Douyin the relay takes over, and later rooms go straight to it', async () => {
+    const relay = 'wss://site.example/api/danmaku?token=jwt';
+    const memory = { directRefused: false };
+    const h = harness(['refuse', 'refuse', 'open'], { relay, memory });
+    await h.waitFor(() => h.sockets[2]?.readyState === 1, 'relay socket');
+    assert.equal(h.fetches.length, 1, 'the cookie is requested once before giving up on direct connections');
+    assert.ok(h.sockets[1].url.startsWith('wss://webcast100-ws-web-lq.douyin.com/'));
+    const address = new URL(h.sockets[2].url);
+    assert.equal(`${address.origin}${address.pathname}`, 'wss://site.example/api/danmaku');
+    assert.deepEqual(Object.fromEntries(address.searchParams), { token: 'jwt', room_id: '7689', signature: 'SIG+/=' });
+    assert.deepEqual(h.sleeps, [], 'switching to the relay does not wait');
+    assert.equal(memory.directRefused, true);
+
+    h.sockets[2].receive(frame({ now: h.now(), messages: [message('WebcastChatMessage', chat({ id: 5, content: '中转弹幕', eventTime: Math.floor(h.now() / 1000) }), 21)] }));
+    await h.waitFor(() => h.comments.length === 1, 'relayed comment');
+    h.controller.abort();
+    await h.done;
+    assert.deepEqual(h.statuses.slice(0, 2), ['弹幕连接中…', '正在向抖音获取访客 Cookie…']);
+    assert.match(h.statuses[2], /改由本站服务器中转弹幕/);
+    assert.deepEqual(h.statuses.slice(3), ['弹幕已连接（经本站服务器中转）。']);
+
+    const next = harness(['open'], { relay, memory });
+    await next.waitFor(() => next.sockets[0]?.readyState === 1, 'next room');
+    assert.ok(next.sockets[0].url.startsWith('wss://site.example/api/danmaku?'));
+    assert.equal(next.fetches.length, 0);
+    next.controller.abort();
+    await next.done;
+});
+
+test('a relay that refuses too stops with an explanation', async () => {
+    const h = harness(['refuse', 'refuse', 'refuse', 'refuse', 'open'], { relay: 'wss://site.example/api/danmaku' });
+    await h.done;
+    assert.equal(h.sockets.length, 4, 'two direct attempts, then two through the relay');
+    assert.deepEqual(h.sleeps, [2000]);
+    assert.match(h.statuses.at(-1), /直连和本站服务器中转都被拒绝/);
+});
+
+test('a browser that has connected directly keeps doing so after refused reconnects', async () => {
+    const memory = { directRefused: false };
+    const h = harness(['open', 'refuse', 'refuse', 'refuse'], { relay: 'wss://site.example/api/danmaku', memory });
+    await h.waitFor(() => h.sockets[0]?.readyState === 1, 'first socket');
+    h.sockets[0].drop();
+    await h.done;
+    assert.equal(h.sockets.length, 4);
+    assert.ok(h.sockets.every(socket => socket.url.startsWith('wss://webcast100-ws-web-lq.douyin.com/')));
+    assert.equal(memory.directRefused, false);
+    assert.match(h.statuses.at(-1), /第三方 Cookie/);
+});
+
 test('dropped connections reconnect with backoff until the live ends', async () => {
     const h = harness(['open', 'open', 'open']);
     await h.waitFor(() => h.sockets[0]?.readyState === 1, 'first socket');
@@ -173,6 +224,68 @@ test('the worker hashes UTF-8 input with md5 and signs it with the vendored Douy
     assert.equal(replies[0].id, 3);
     assert.equal(typeof replies[0].signature, 'string');
     assert.ok(replies[0].signature.length >= 8);
+});
+
+// --- Relay (server side) ---
+test('the relay opens the signed push address for valid requests only, with a reused visitor cookie', async () => {
+    const target = relayTarget(new URLSearchParams({ room_id: '7689', signature: 'f/4N4c1w+R5zIrtb=' }), 1790000000000);
+    assert.equal(target, `${pushAddress('7689', 1790000000000).url}&signature=f%2F4N4c1w%2BR5zIrtb%3D`);
+    assert.throws(() => relayTarget(new URLSearchParams({ room_id: '12a', signature: 'f/4N4c1wR5zIrtb3' })), /房间 ID 无效/);
+    assert.throws(() => relayTarget(new URLSearchParams({ room_id: '7689', signature: 'a b&c=dddd' })), /签名无效/);
+    assert.throws(() => relayTarget(new URLSearchParams({ room_id: '7689' })), /签名无效/);
+
+    const fetches = [], connects = [], socket = {};
+    let answer = socket;
+    const fetchImpl = async (url, options) => {
+        fetches.push({ url, options });
+        return { body: { cancel: async () => {} }, headers: { getSetCookie: () => ['UIFID=x; Path=/', 'ttwid=1%7Cabc; Path=/; Domain=douyin.com; HttpOnly; Secure'] } };
+    };
+    const connectImpl = async (url, headers) => { connects.push({ url, headers }); return answer; };
+    assert.equal(await openUpstream(target, connectImpl, fetchImpl), socket);
+    assert.equal(fetches[0].url, 'https://live.douyin.com/');
+    assert.match(fetches[0].options.headers['User-Agent'], /Chrome\//);
+    assert.equal(connects[0].url, target);
+    assert.equal(connects[0].headers.Cookie, 'ttwid=1%7Cabc');
+    assert.equal(connects[0].headers['User-Agent'], fetches[0].options.headers['User-Agent']);
+    await openUpstream(target, connectImpl, fetchImpl);
+    assert.equal(fetches.length, 1, 'the visitor cookie is reused');
+    answer = null;
+    assert.equal(await openUpstream(target, connectImpl, fetchImpl), null);
+    answer = socket;
+    await openUpstream(target, connectImpl, fetchImpl);
+    assert.equal(fetches.length, 2, 'a refusal fetches a fresh cookie next time');
+
+    const noCookie = async () => ({ body: null, headers: { getSetCookie: () => ['UIFID=x; Path=/'] } });
+    await assert.rejects(visitorCookie(noCookie, Date.now() + 2 * 3600000), /访客 Cookie/);
+});
+
+test('the relay passes frames both ways and closes the other side when one ends', () => {
+    const socket = () => {
+        const listeners = {};
+        return {
+            readyState: 1, sent: [], closed: 0,
+            addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
+            emit(type, event = {}) { for (const fn of listeners[type] || []) fn(event); },
+            send(data) { this.sent.push(data); },
+            close() { this.closed++; this.readyState = 3; }
+        };
+    };
+    const browser = socket(), douyin = socket();
+    pipeSockets(browser, douyin);
+    douyin.emit('message', { data: 'frame' });
+    browser.emit('message', { data: 'hb' });
+    assert.deepEqual(browser.sent, ['frame']);
+    assert.deepEqual(douyin.sent, ['hb']);
+    douyin.readyState = 3;
+    douyin.emit('close');
+    assert.deepEqual([browser.closed, douyin.closed], [1, 0]);
+    douyin.emit('message', { data: 'late' });
+    assert.deepEqual(browser.sent, ['frame'], 'nothing goes to a closed socket');
+
+    const a = socket(), b = socket();
+    pipeSockets(a, b);
+    a.emit('error');
+    assert.equal(b.closed, 1);
 });
 
 // --- Overlay ---

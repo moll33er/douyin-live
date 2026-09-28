@@ -8,6 +8,7 @@
 2. **轻量依赖**：移除了原生的 `crypto` 和相对重量级的 `jsonwebtoken`，引入专门为 Edge Runtime 设计的标准 JWT 库 `jose`。
 3. **原生 Fetch**：不再使用 `axios`，利用 Cloudflare 边缘环境原生的 `fetch` 接口来请求抖音页面。
 4. **无状态 Secrets**：原有的文件系统 (`fs`) 和动态生成的 Secret 已被移除，改为通过 Cloudflare 的**环境变量和 Secrets** 进行更规范的管理。
+5. **弹幕中转**：`functions/api/danmaku.js` 为无法直连抖音弹幕的浏览器（Safari、iPhone/iPad、无痕窗口）转接 WebSocket。函数只在建立连接时运行，之后的数据帧由 Cloudflare 运行时直接转发，不再执行函数代码，也不需要新依赖。
 
 ## 部署步骤
 

@@ -1,6 +1,7 @@
-/* Live comments (danmaku) for a Douyin room, received directly by the viewer's browser and scrolled over the
-   player. Douyin pushes room messages over a websocket that needs a `signature` from its web SDK (computed in
-   danmaku-worker.js) and a `ttwid` cookie for douyin.com. Frames are protobuf with gzip payloads; field
+/* Live comments (danmaku) for a Douyin room, received by the viewer's browser and scrolled over the player.
+   Douyin pushes room messages over a websocket that needs a `signature` from its web SDK (computed in
+   danmaku-worker.js) and a `ttwid` cookie for douyin.com. Browsers that keep that cookie from Douyin get the same
+   websocket through the site's server instead (danmaku-relay.js). Frames are protobuf with gzip payloads; field
    numbers follow douyin.proto from saermart/DouyinLiveWebFetcher. Only chats are shown: anonymous viewers
    get masked nicknames and no gift messages. */
 
@@ -16,6 +17,8 @@ const BACKLOG_MS = 10000;
 const SIGN_TIMEOUT_MS = 15000;
 const SEEN_LIMIT = 2000;
 const BLOCKED_TEXT = '弹幕连接被抖音拒绝。浏览器可能屏蔽了第三方 Cookie（如无痕模式、Safari），也可能是抖音更新了接口；允许 douyin.com 的 Cookie 后重新勾选“弹幕”重试。';
+const RELAY_TEXT = '浏览器没有把 Cookie 发给抖音（Safari、iPhone/iPad 上的浏览器和无痕模式常见），改由本站服务器中转弹幕…';
+const RELAY_FAILED_TEXT = '弹幕连接失败：浏览器直连和本站服务器中转都被拒绝。可能是抖音更新了接口或登录已过期，稍后重新勾选“弹幕”重试。';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -39,6 +42,14 @@ export function pushAddress(roomId, now = Date.now()) {
         url: `${PUSH_URL}?${params.map(([key, value]) => `${key}=${value}`).join('&')}`,
         signInput: SIGNED_PARAMS.map(key => `${key}=${values.get(key) ?? ''}`).join(',')
     };
+}
+
+// The relay at `base` rebuilds the push address itself; it only needs the room and the signature for it.
+export function relayAddress(base, roomId, signature) {
+    const url = new URL(base);
+    url.searchParams.set('room_id', roomId);
+    url.searchParams.set('signature', signature);
+    return url.href;
 }
 
 // --- Protobuf ---
@@ -191,6 +202,9 @@ function sleep(ms, signal) {
     });
 }
 
+// Once the browser proves unable to connect directly, later rooms on this page go straight to the relay.
+const memory = { directRefused: false };
+
 const defaultEnv = () => ({
     WebSocket: globalThis.WebSocket,
     fetch: (...args) => globalThis.fetch(...args),
@@ -198,16 +212,17 @@ const defaultEnv = () => ({
     sleep,
     setInterval: (fn, ms) => globalThis.setInterval(fn, ms),
     clearInterval: id => globalThis.clearInterval(id),
-    now: () => Date.now()
+    now: () => Date.now(),
+    memory
 });
 
-// One websocket connection; resolves when it closes.
-async function session(roomId, env, seen, onComment, onStatus, signal) {
+// One websocket connection, directly to Douyin or through the relay at `relay`; resolves when it closes.
+async function session(roomId, env, relay, seen, onComment, onStatus, signal) {
     const { url, signInput } = pushAddress(roomId, env.now());
     const signature = await env.sign(signInput);
     if (signal.aborted) return { opened: false };
     return new Promise(resolve => {
-        const ws = new env.WebSocket(`${url}&signature=${encodeURIComponent(signature)}`);
+        const ws = new env.WebSocket(relay ? relayAddress(relay, roomId, signature) : `${url}&signature=${encodeURIComponent(signature)}`);
         ws.binaryType = 'arraybuffer';
         let openedAt = null, ended = false, heartbeat = null, queue = Promise.resolve();
         const close = () => { try { ws.close(); } catch (err) { /* Already closed. */ } };
@@ -235,7 +250,7 @@ async function session(roomId, env, seen, onComment, onStatus, signal) {
 
         ws.onopen = () => {
             openedAt = env.now();
-            onStatus('弹幕已连接。');
+            onStatus(relay ? '弹幕已连接（经本站服务器中转）。' : '弹幕已连接。');
             heartbeat = env.setInterval(() => send(HEARTBEAT), HEARTBEAT_MS);
         };
         ws.onmessage = ({ data }) => { queue = queue.then(() => handle(data)).catch(() => {}); };
@@ -249,16 +264,18 @@ async function session(roomId, env, seen, onComment, onStatus, signal) {
 }
 
 // Keeps the room's danmaku flowing until `signal` aborts, the live ends or Douyin keeps refusing the connection.
-export async function connect(roomId, { onComment, onStatus = () => {}, signal }, overrides = {}) {
+// `relay` is the websocket address of the site's relay, used when the browser cannot connect to Douyin itself.
+export async function connect(roomId, { onComment, onStatus = () => {}, signal, relay = null }, overrides = {}) {
     const env = { ...defaultEnv(), ...overrides };
     const seen = new Set();
     const status = message => { if (!signal.aborted) onStatus(message); };
-    let primed = false, refused = 0, retries = 0;
+    let viaRelay = !!relay && env.memory.directRefused;
+    let primed = false, directOpened = false, refused = 0, retries = 0;
     status('弹幕连接中…');
     while (!signal.aborted) {
         let result;
         try {
-            result = await session(roomId, env, seen, comment => { if (!signal.aborted) onComment(comment); }, status, signal);
+            result = await session(roomId, env, viaRelay ? relay : null, seen, comment => { if (!signal.aborted) onComment(comment); }, status, signal);
         } catch (err) {
             status(`弹幕加载失败（${err.message}）。`);
             return;
@@ -270,18 +287,25 @@ export async function connect(roomId, { onComment, onStatus = () => {}, signal }
         }
         if (!result.opened) {
             // A refused handshake usually means the browser has no ttwid cookie yet; any Douyin page sets one.
-            if (!primed) {
+            if (!viaRelay && !primed) {
                 primed = true;
                 status('正在向抖音获取访客 Cookie…');
                 await env.fetch('https://live.douyin.com/', { mode: 'no-cors', credentials: 'include', cache: 'no-store', signal }).catch(() => {});
                 continue;
             }
+            // Still refused right after Douyin set the cookie: the browser keeps it from Douyin's websocket.
+            if (!viaRelay && relay && !directOpened) {
+                env.memory.directRefused = viaRelay = true;
+                status(RELAY_TEXT);
+                continue;
+            }
             if (++refused >= 2) {
-                status(BLOCKED_TEXT);
+                status(viaRelay ? RELAY_FAILED_TEXT : BLOCKED_TEXT);
                 return;
             }
         } else {
             refused = 0;
+            directOpened ||= !viaRelay;
         }
         retries = result.lasted >= 30000 ? 0 : retries + 1;
         const delay = Math.min(60000, 1000 * 2 ** retries);

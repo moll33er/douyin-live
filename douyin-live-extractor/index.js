@@ -1,11 +1,13 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import { WebSocketServer } from 'ws';
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getRoomStreams, InputError } from './public/douyin.js';
+import { relayTarget, openUpstream, pipeSockets } from './public/danmaku-relay.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -118,6 +120,63 @@ app.get('/api/live', authMiddleware, async (req, res) => {
 const server = app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
   console.log(REQUIRE_LOGIN ? `Log in via the web interface to generate a token.` : `Login is disabled by config.`);
+});
+
+// Danmaku relay (/api/danmaku): browsers that cannot send Douyin its cookie get the room's push websocket
+// through this server, which connects with its own visitor cookie (see public/danmaku-relay.js).
+const relayServer = new WebSocketServer({ noServer: true });
+
+function connectDouyin(url, headers) {
+  return new Promise((resolve) => {
+    const socket = new WebSocket(url, { headers });
+    socket.binaryType = 'arraybuffer';
+    socket.onopen = () => {
+      socket.onopen = socket.onerror = socket.onclose = null;
+      resolve(socket);
+    };
+    socket.onerror = socket.onclose = () => resolve(null);
+  });
+}
+
+server.on('upgrade', async (req, socket, head) => {
+  socket.on('error', () => socket.destroy());
+  const reject = (status) => socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname !== '/api/danmaku') return reject('404 Not Found');
+
+  if (REQUIRE_LOGIN) {
+    try {
+      jwt.verify(url.searchParams.get('token') || req.headers['x-api-key'] || '', JWT_SECRET);
+    } catch (err) {
+      return reject('401 Unauthorized');
+    }
+  }
+
+  let target;
+  try {
+    target = relayTarget(url.searchParams);
+  } catch (error) {
+    return reject('400 Bad Request');
+  }
+
+  // Connect to Douyin first, so the browser only sees an open socket when danmaku can flow.
+  let douyin = null;
+  try {
+    douyin = await openUpstream(target, connectDouyin);
+  } catch (error) {
+    console.error('Danmaku relay:', error.message);
+  }
+  if (!douyin) return reject('502 Bad Gateway');
+  if (socket.destroyed) return douyin.close();
+
+  // A handshake that ws rejects closes the socket without piping; Douyin's side is closed with it.
+  let piped = false;
+  socket.once('close', () => { if (!piped) douyin.close(); });
+  relayServer.handleUpgrade(req, socket, head, (client) => {
+    piped = true;
+    client.binaryType = 'arraybuffer';
+    pipeSockets(client, douyin);
+  });
 });
 
 server.on('error', (e) => {

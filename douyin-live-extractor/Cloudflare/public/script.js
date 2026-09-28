@@ -785,9 +785,18 @@ function startDanmaku() {
     danmakuOverlay ??= new api.DanmakuOverlay(danmakuLayer);
     api.connect(roomId, {
         signal: controller.signal,
+        relay: danmakuRelayAddress(),
         onComment: comment => danmakuOverlay.add(comment.content),
         onStatus: message => { danmakuStatus.textContent = message; }
     });
+}
+
+// This site's danmaku relay, for browsers that keep Douyin's cookie from its websocket (Safari, iOS, private windows).
+function danmakuRelayAddress() {
+    const url = new URL('/api/danmaku', location.href);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    if (REQUIRE_LOGIN && state.token) url.searchParams.set('token', state.token);
+    return url.href;
 }
 
 function stopDanmaku() {

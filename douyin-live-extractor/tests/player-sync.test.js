@@ -55,6 +55,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
     const context = vm.createContext({
         document: { getElementById: id => elements.get(id), createElement: element, addEventListener() {}, querySelectorAll: () => [] },
         window: { addEventListener() {}, DouyinLocalParser: localParser, DouyinDanmaku: danmaku }, CdnTester: cdnTester, QualityTester: qualityTester,
+        location: { href: 'https://douyin-live.pages.dev/' },
         localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
         axios: { get: async (url, options) => {
             if (url === '/api/config') return { data: { requireLogin: false } };
@@ -95,7 +96,7 @@ function setup({ mode = 'fresh', nativeHls = false, liveResponse, cdnTester, qua
 }
 
 test('both deployable frontends stay identical', () => {
-    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js', 'quality-tester.js', 'browser-parser.js', 'douyin-live-bridge.user.js', 'danmaku.js', 'danmaku-worker.js', 'douyin-sign.js']) {
+    for (const file of ['script.js', 'index.html', 'style.css', 'cdn-tester.js', 'quality-tester.js', 'browser-parser.js', 'douyin-live-bridge.user.js', 'danmaku.js', 'danmaku-worker.js', 'douyin-sign.js', 'danmaku-relay.js']) {
         assert.equal(readFileSync(new URL(`public/${file}`, root), 'utf8'), readFileSync(new URL(`Cloudflare/public/${file}`, root), 'utf8'));
     }
 });
@@ -713,6 +714,7 @@ test('live comments connect once a live room plays, survive stream switches and 
     h.start();
     assert.equal(calls.length, 1);
     assert.equal(calls[0].roomId, '7689');
+    assert.equal(calls[0].relay, 'wss://douyin-live.pages.dev/api/danmaku', 'the relay needs no token without login');
     h.run("playStream('https://cdn/other.flv', 'flv', 'sd')");
     assert.equal(calls.length, 1, 'switching quality keeps the connection');
     calls[0].onStatus('弹幕已连接。');
@@ -727,8 +729,10 @@ test('live comments connect once a live room plays, survive stream switches and 
     assert.equal(h.storage.get('douyin_danmaku'), 'off');
     assert.equal(h.elements.get('danmaku-status').textContent, '');
     assert.ok(cleared >= 1);
+    h.run("REQUIRE_LOGIN = true; state.token = 'jwt.token'");
     toggle.checked = true; toggle.emit('change');
     assert.equal(calls.length, 2);
+    assert.equal(calls[1].relay, 'wss://douyin-live.pages.dev/api/danmaku?token=jwt.token');
 
     data = { ...data, room_id: '8888', status: 4 };
     await h.run('handleExtract()');
